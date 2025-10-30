@@ -1,0 +1,71 @@
+@startuml
+' 极简版核心功能UML图
+
+' 核心实体类
+class UserData {
+    -Long id
+    -String username
+    -String password
+    -String nickname
+    -String avatar
+}
+
+class StickVO {
+    -Long id
+    -String content
+    -String createdAt
+}
+
+class PStickVO {
+    -Long id
+    -String name
+    -String content
+    -String createdAt
+}
+
+' 核心控制器
+class UserController {
+    +register(UserData userData) Result
+    +login(UserData userData) Result
+}
+
+class StickController {
+    +getTiles(StickQueryParam param) Result
+    +addTile(Map requestBody) Result
+    +updateTile(Long tileId, String content) boolean
+    +deleteTile(Long tileId) boolean
+}
+
+class PStickController {
+    +getPSticks(PStickQueryParam param) Result
+    +updatePName(Long pTileId, Map requestBody) boolean
+    +deletePTile(Long pTileId) boolean
+}
+
+' 核心服务接口
+class UserService <<interface>> {
+    +boolean register(UserData userData)
+    +UserData login(UserData userData)
+}
+
+class StickService <<interface>> {
+    +PageResult getTiles(StickQueryParam param)
+    +boolean updateTile(Long tileId, String content)
+    +boolean deleteTile(Long id)
+}
+
+class PStickService <<interface>> {
+    +PageResult getPTiles(PStickQueryParam param)
+    +boolean updatePTile(Long pStickId, String content, String name)
+    +boolean deletePTile(Long id)
+}
+
+' 关系
+UserController --> UserService
+StickController --> StickService
+PStickController --> PStickService
+
+UserService <|.. UserServiceimpl
+StickService <|.. StickServiceimpl
+PStickService <|.. PStickServiceimpl
+@enduml

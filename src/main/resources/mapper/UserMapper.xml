@@ -1,0 +1,32 @@
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tmd.mapper.UserMapper">
+
+    <select id="findByUserIdAndPassword" resultType="com.tmd.entity.po.UserData">
+        select * from users where id=#{uid} and password=#{oldPassword}
+    </select>
+
+    <update id="update">
+        update users
+        <set>
+            <if test="username != null">
+                username = #{username},
+            </if>
+            <if test="password != null">
+                password = #{password},
+            </if>
+            <if test="nickname != null">
+                nickname = #{nickname},
+            </if>
+            <if test="avatar != null">
+                avatar = #{avatar},
+            </if>
+        </set>
+        where id = #{id}
+    </update>
+    
+    <update id="updatePassword">
+        update users set password=#{newPassword} where id=#{uid} and password=#{oldPassword}
+    </update>
+</mapper>

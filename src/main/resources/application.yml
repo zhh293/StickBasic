@@ -1,0 +1,51 @@
+server:
+  port: 8080
+spring:
+  application:
+    name: BasicBack
+  datasource:
+    url: jdbc:postgresql://localhost:5432/basic
+    username: postgres
+    password: jinmuyan1314217
+    driver-class-name: org.postgresql.Driver
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      lettuce:
+        pool:
+          enabled: true
+          max-active: 10
+          max-idle: 10
+          min-idle: 0
+  ai:
+    openai:
+      api-key: sk-35b17d7ae2a0404fafe57a5ba2ad6ef3
+      base-url: https://dashscope.aliyuncs.com/compatible-mode
+      chat:
+        options:
+          model: qwen-plus
+      embedding:
+        options:
+          model: text-embedding-v3
+          dimensions: 1024
+#jwt
+Bluegod:
+  security:
+    jwt-key: Bluegod
+    # 过期时间
+    token-expired-in: 86400000
+pagehelper:
+  reasonable: true
+  helper-dialect: mysql
+mybatis:
+  configuration:
+    #驼峰映射开关
+    map-underscore-to-camel-case: on
+  mapper-locations: classpath:mapper/*.xml
+sky:
+  alioss:
+    endpoint: oss-cn-beijing.aliyuncs.com
+    access-key-id: your-access-key-id
+    access-key-secret: your-access-key-secret
+    bucket-name: your-bucket-name
