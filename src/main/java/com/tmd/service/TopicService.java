@@ -1,0 +1,18 @@
+package com.tmd.service;
+
+import com.tmd.entity.dto.Result;
+import com.tmd.entity.dto.TopicDTO;
+import org.springframework.stereotype.Service;
+
+@Service
+public interface TopicService {
+    Result getAllTopics(Integer page, Integer size, String status) throws InterruptedException;
+
+    Result getTopicById(Integer topicId);
+
+    Result createTopic(TopicDTO topic);
+
+    Result followTopic(Integer topicId);
+
+    Result getTopicFollowers(Integer topicId, Integer page, Integer size);
+}

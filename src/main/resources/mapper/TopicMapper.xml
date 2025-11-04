@@ -1,0 +1,12 @@
+<!--定义Mapper映射文件的约束和基本结构-->
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tmd.mapper.TopicMapper">
+
+    <insert id="insert">
+        insert into sticknew.topic
+        (name, description, cover_image, user_id, created_at, updated_at)
+        values (#{name}, #{description}, #{coverImage}, #{userId}, #{createdAt}, #{updatedAt} )
+    </insert>
+</mapper>

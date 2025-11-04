@@ -1,0 +1,17 @@
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tmd.mapper.MailMapper">
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO mail (sender_id, stamp_type, stamp_content, sender_nickname, recipient_email, content, status, read_at, created_at)
+        VALUES (#{senderId}, #{stampType}, #{stampContent}, #{senderNickname}, #{recipientEmail}, #{content}, #{status}, #{readAt}, #{createdAt})
+    </insert>
+
+    <select id="selectByIds" resultType="com.tmd.entity.dto.mail">
+        <!--批量查询-->
+ 　　　　 select * from mail where id in
+        <foreach item="item" index="index" collection="ids" open="(" separator="," close=")">
+            #{item}
+        </foreach>
+    </select>
+</mapper>

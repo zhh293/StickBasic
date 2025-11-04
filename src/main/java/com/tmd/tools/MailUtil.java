@@ -34,7 +34,30 @@ public class MailUtil { // 注意：类名和Hutool的MailUtil重名，建议改
         mailAccount.setSslEnable(sslEnabled);
 
         // 调用Hutool的静态MailUtil发送（注意：如果自定义类名和Hutool重名，这里要写全类名）
+        // 参数 false 表示不是HTML格式
         cn.hutool.extra.mail.MailUtil.send(mailAccount, to, subject, content, false, file);
     }
-}
 
+    /**
+     * 发送HTML格式的邮件
+     * 
+     * @param to          收件人邮箱
+     * @param subject     邮件主题
+     * @param htmlContent HTML格式的邮件内容
+     * @param file        附件（可选，传null表示无附件）
+     */
+    public void sendHtmlMail(String to, String subject, String htmlContent, File file) {
+        MailAccount mailAccount = new MailAccount();
+        mailAccount.setHost(host);
+        mailAccount.setPort(Integer.valueOf(port));
+        mailAccount.setFrom(from);
+        mailAccount.setUser(username);
+        mailAccount.setPass(password);
+        mailAccount.setStarttlsEnable(starttlsEnable);
+        mailAccount.setDebug(debug);
+        mailAccount.setSslEnable(sslEnabled);
+
+        // 调用Hutool的静态MailUtil发送，参数 true 表示内容是HTML格式
+        cn.hutool.extra.mail.MailUtil.send(mailAccount, to, subject, htmlContent, true, file);
+    }
+}
