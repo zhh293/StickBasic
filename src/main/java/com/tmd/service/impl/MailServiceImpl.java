@@ -12,6 +12,7 @@ import com.tmd.mapper.ReceivedMailMapper;
 import com.tmd.publisher.MessageProducer;
 import com.tmd.service.MailService;
 import com.tmd.tools.BaseContext;
+import com.tmd.tools.RedisIdWorker;
 import lombok.extern.slf4j.Slf4j;
 import org.elasticsearch.search.Scroll;
 import org.redisson.api.RLock;
@@ -27,6 +28,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -48,6 +50,8 @@ public class MailServiceImpl implements MailService {
     private MailCommentMapper mailCommentMapper;
     @Autowired
     private ReceivedMailMapper receivedMailMapper;
+    @Autowired
+    private RedisIdWorker redisIdWorker;
     @Override
     public MailVO getMailById(Integer mailId) {
         // 先查redis，缓存中有则直接返回
@@ -199,21 +203,12 @@ public class MailServiceImpl implements MailService {
     }
 
     @Override
-    public void comment(Integer mailId, MailDTO mailDTO) {
+    public Result comment(Long mailId, MailDTO mailDTO,Boolean isFirst) {
         //首先肯定要操作数据库的，最好使用redis缓存
         //所以我的思路如下
         //先把maildto整理为mail，然后将mail推送到别人的邮箱当中，mail:push:userId，这个操作通过redis可以轻松实现
-        mail commentMail= mail.builder()
-                .senderId(BaseContext.get())
-                .senderNickname(mailDTO.getSenderNickname())
-                .recipientEmail(mailDTO.getRecipientEmail())
-                .content(mailDTO.getContent())
-                .status(mailStatus.sent)
-                .createdAt(LocalDateTime.now())
-                .stampType(mailDTO.getStampType())
-                .stampContent(mailDTO.getStampContent())
-                .build();
         //通过redis获取mailId对应的邮件
+        if(isFirst){
         String s = stringRedisTemplate.opsForValue().get("mail:" + mailId);
         mail mail = JSONUtil.toBean(s, mail.class);
         Long senderId = mail.getSenderId();
@@ -223,7 +218,9 @@ public class MailServiceImpl implements MailService {
                 .content(mailDTO.getContent())
                 .createAt(LocalDateTime.now())
                 .build();
-        ReceivedMail receivedMail = ReceivedMail.builder()
+            long l = redisIdWorker.nextId("mailreceive");
+            ReceivedMail receivedMail = ReceivedMail.builder()
+                    .id(l)
                 .createAt(LocalDateTime.now())
                 .originalMailId(Long.valueOf(mailId))
                 .recipientId(senderId)
@@ -244,18 +241,98 @@ public class MailServiceImpl implements MailService {
             mailCommentMapper.insert(mailComment);
 
             receivedMailMapper.insert(receivedMail);
-            //评论的邮件是私有的，就不放在共有的mail数据库了
+
             log.info("[邮件服务] 评论成功");
         });
+        return Result.success(MailCommentVO .builder()
+                .isFirst(false)
+                .build());
+        }else{
+            //如果不是第一次的话，说明是互相来信，那么这次的邮件id就是自己信箱中收到的邮件的id，也就是说是receivemailId，上一次来信的id
+            //要通过receivemailId找到回信的人的信息
+            ReceivedMail receivedMail = receivedMailMapper.selectByMailId(mailId);
+            ReceivedMail readyToAdd=ReceivedMail.builder()
+                    .id(redisIdWorker.nextId("mailreceive"))
+                    .createAt(LocalDateTime.now())
+                    .originalMailId(receivedMail.getOriginalMailId())
+                    .content(mailDTO.getContent())
+                    .stampType(mailDTO.getStampType())
+                    .status(mailStatus.sent)
+                    .senderNickname(mailDTO.getSenderNickname())
+                    .recipientId(receivedMail.getSenderId())
+                    .senderId(BaseContext.get())
+                    .readAt(null)
+                    .build();
+            stringRedisTemplate.opsForZSet().add("mail:push:" + receivedMail.getSenderId(), JSONUtil.toJsonStr(readyToAdd),
+                    System.currentTimeMillis());
+            MailComment mailComment=MailComment.builder()
+                    .mailId(receivedMail.getOriginalMailId())
+                    .commenterId(BaseContext.get())
+                    .content(mailDTO.getContent())
+                    .createAt(LocalDateTime.now())
+                    .build();
+            stringRedisTemplate.opsForList().leftPush("mail:comment:" +BaseContext.get(), JSONUtil.toJsonStr(mailComment));
+            threadPoolConfig.threadPoolExecutor().execute(()->{
+                mailCommentMapper.insert(mailComment);
+                receivedMailMapper.insert(readyToAdd);
+                log.info("[邮件服务] 评论成功");
+            });
+            return Result.success(MailCommentVO .builder()
+                    .isFirst(false)
+                    .build());
+        }
     }
 
     @Override
     public PageResult getReceivedMails(Integer page, Integer size, String status) {
         //先查redis，redis没有再查数据库
         Set<String> set = stringRedisTemplate.opsForZSet().rangeByScore("mail:push:" + BaseContext.get(), 0, System.currentTimeMillis(), (long) (page - 1) * size, size);
-        List<ReceivedMail> receivedMails = new ArrayList<>();
-        for (String s : set) {
-            ReceivedMail receivedMail = JSONUtil.toBean(s, ReceivedMail.class);
+        List<ReceivedMailVO> receivedMails = new ArrayList<>();
+        if (set != null) {
+            for (String s : set) {
+                ReceivedMail receivedMail = JSONUtil.toBean(s, ReceivedMail.class);
+                ReceivedMailVO receivedMailVO = ReceivedMailVO.builder()
+                        .receivedMailId(receivedMail.getId())
+                        .senderNickname(receivedMail.getSenderNickname())
+                        .stampType(receivedMail.getStampType())
+                        .reviewContent(receivedMail.getContent())
+                        .createdAt(receivedMail.getCreateAt())
+                        .build();
+                //获取原来的邮件的内容
+                String s1 = stringRedisTemplate.opsForValue().get("mail:" + receivedMail.getOriginalMailId());
+                mail mail = JSONUtil.toBean(s1, mail.class);
+                receivedMailVO.setContent(mail.getContent());
+                receivedMails.add(receivedMailVO);
+            }
+            return PageResult.builder()
+                    .total(stringRedisTemplate.opsForZSet().size("mail:push:" + BaseContext.get()))
+                    .rows(receivedMails)
+                    .build();
+        }else{
+              PageHelper.startPage(page, size);
+              Page<ReceivedMail> page1 = receivedMailMapper.selectByUserId(BaseContext.get());
+              List<ReceivedMailVO> collect = page1.getResult().stream()
+                    .map(receivedMail -> ReceivedMailVO.builder()
+                            .receivedMailId(receivedMail.getId())
+                            .senderNickname(receivedMail.getSenderNickname())
+                            .stampType(receivedMail.getStampType())
+                            .reviewContent(receivedMail.getContent())
+                            .createdAt(receivedMail.getCreateAt())
+                            .content(JSONUtil.toBean(stringRedisTemplate.opsForValue().get("mail:" + receivedMail.getOriginalMailId()), mail.class).getContent())
+                            .build()
+                    ).collect(Collectors.toList());
+              //恢复缓存，缓存的key为mail:push:userId
+            threadPoolConfig.threadPoolExecutor().execute(() -> {
+                for(int i=0;i<page1.getTotal();i++){
+                    stringRedisTemplate.opsForZSet().add("mail:push:" + BaseContext.get(), JSONUtil.toJsonStr(page1.getResult().get(i)),
+                            System.currentTimeMillis());
+                }
+                log.info("[邮件服务] 恢复缓存成功");
+            });
+              return PageResult.builder()
+                    .total(page1.getTotal())
+                    .rows(collect)
+                    .build();
         }
     }
 }

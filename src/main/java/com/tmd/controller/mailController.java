@@ -48,9 +48,8 @@ public class mailController {
     }
 
     @PostMapping("/{mailId}/comments")
-    public Result comment(@PathVariable Integer mailId,@RequestBody MailDTO mailDTO){
-        mailService.comment(mailId,mailDTO);
-        return Result.success("评论成功哦");
+    public Result comment(@PathVariable Long mailId,@RequestBody MailDTO mailDTO,@RequestParam(defaultValue = "true") Boolean isFirst){
+        return mailService.comment(mailId,mailDTO,isFirst);
     }
 
     @GetMapping("/received")

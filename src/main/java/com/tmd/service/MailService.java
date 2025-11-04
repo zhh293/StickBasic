@@ -14,7 +14,7 @@ public interface MailService {
 
     void sendMail(MailDTO mailDTO);
 
-    void comment(Integer mailId, MailDTO mailDTO);
+    Result comment(Long mailId, MailDTO mailDTO,Boolean isFirst);
 
     PageResult getReceivedMails(Integer page, Integer size, String status);
 }

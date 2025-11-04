@@ -2,8 +2,8 @@
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.tmd.mapper.ReceivedMailMapper">
-    <insert id="insert" keyProperty="id" useGeneratedKeys="true">
-        INSERT INTO received_mail (recipient_id, sender_id, content, stamp_type, sender_nickname, original_mail_id, status, read_at, create_at)
-        VALUES (#{recipientId}, #{senderId}, #{content}, #{stampType}, #{senderNickname}, #{originalMailId}, #{status}, #{readAt}, #{createAt})
+    <insert id="insert">
+        INSERT INTO received_mail (id,recipient_id, sender_id, content, stamp_type, sender_nickname, original_mail_id, status, read_at, create_at)
+        VALUES (#{id},#{recipientId}, #{senderId}, #{content}, #{stampType}, #{senderNickname}, #{originalMailId}, #{status}, #{readAt}, #{createAt})
     </insert>
 </mapper>
