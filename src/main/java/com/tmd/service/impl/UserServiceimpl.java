@@ -109,6 +109,18 @@ public class UserServiceimpl implements UserService, UserDetailsService {
     }
 
     @Override
+    public boolean softDeleteUser(Long userId) {
+        try {
+            log.info("执行软删除用户: userId={}", userId);
+            userMapper.softDelete(userId);
+            return true;
+        } catch (Exception e) {
+            log.error("软删除用户失败: userId={}", userId, e);
+            return false;
+        }
+    }
+
+    @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
         log.info("[用户登录] 尝试登录用户: {}", username);
         //开始匹配并且放入

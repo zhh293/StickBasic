@@ -26,4 +26,8 @@
     <update id="updatePassword">
         update users set password=#{newPassword} where id=#{uid} and password=#{oldPassword}
     </update>
+
+    <update id="softDelete">
+        update users set deleted_at = CURRENT_TIMESTAMP where id = #{userId} and deleted_at is null
+    </update>
 </mapper>

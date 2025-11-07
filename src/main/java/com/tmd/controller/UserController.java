@@ -9,6 +9,7 @@ import com.tmd.entity.dto.UserVO;
 import com.tmd.entity.po.LoginUser;
 import com.tmd.entity.po.UserData;
 import com.tmd.service.AttachmentService;
+import com.tmd.service.FollowService;
 import com.tmd.service.UserService;
 import com.tmd.tools.BaseContext;
 import com.tmd.tools.JwtUtil;
@@ -22,7 +23,7 @@ import org.springframework.web.bind.annotation.*;
 import com.tmd.entity.dto.FileUploadResponse;
 import cn.hutool.core.util.StrUtil;
 import java.net.URL;
-
+import java.util.List;
 import java.util.Map;
 
 import static com.tmd.constants.common.ERROR_CODE;
@@ -32,6 +33,9 @@ import static com.tmd.constants.common.ERROR_CODE;
 public class UserController {
     @Autowired
     private UserService userService;
+
+    @Autowired
+    private FollowService followService;
 
     @Autowired
     private AttachmentService attachmentService;
@@ -75,6 +79,99 @@ public class UserController {
         return Result.error("验证失败,非法访问");
     }
     //忘记密码功能
+
+    @PostMapping("/{userId}/follow")
+    public Result followUser(@PathVariable Long userId) {
+        log.info("用户正在关注用户:{}", userId);
+        Long id = BaseContext.get();
+        if (id != ERROR_CODE) {
+            boolean success = followService.followUser(id, userId);
+            if (success) {
+                return Result.success("关注成功");
+            } else {
+                return Result.error("关注失败");
+            }
+        }
+        return Result.error("验证失败,非法访问");
+    }
+
+    @DeleteMapping("/{userId}/follow")
+    public Result unfollowUser(@PathVariable Long userId) {
+        log.info("用户正在取消关注用户:{}", userId);
+        Long id = BaseContext.get();
+        if (id != ERROR_CODE) {
+            boolean success = followService.unfollowUser(id, userId);
+            if (success) {
+                return Result.success("取消关注成功");
+            } else {
+                return Result.error("取消关注失败");
+            }
+        }
+        return Result.error("验证失败,非法访问");
+    }
+
+    @GetMapping("/{userId}/following")
+    public Result getFollowing(@PathVariable Long userId) {
+        log.info("获取用户 {} 的关注列表", userId);
+        try {
+            List<Long> followingIds = followService.getFollowingIds(userId);
+            return Result.success(followingIds);
+        } catch (Exception e) {
+            log.error("获取关注列表失败: 用户 {}", userId, e);
+            return Result.error("获取关注列表失败");
+        }
+    }
+
+    @GetMapping("/{userId}/followers")
+    public Result getFollowers(@PathVariable Long userId) {
+        log.info("获取用户 {} 的粉丝列表", userId);
+        try {
+            List<Long> followerIds = followService.getFollowerIds(userId);
+            return Result.success(followerIds);
+        } catch (Exception e) {
+            log.error("获取粉丝列表失败: 用户 {}", userId, e);
+            return Result.error("获取粉丝列表失败");
+        }
+    }
+
+    @GetMapping("/{userId}/following/count")
+    public Result getFollowingCount(@PathVariable Long userId) {
+        log.info("获取用户 {} 的关注数量", userId);
+        try {
+            int count = followService.getFollowingCount(userId);
+            return Result.success(count);
+        } catch (Exception e) {
+            log.error("获取关注数量失败: 用户 {}", userId, e);
+            return Result.error("获取关注数量失败");
+        }
+    }
+
+    @GetMapping("/{userId}/followers/count")
+    public Result getFollowerCount(@PathVariable Long userId) {
+        log.info("获取用户 {} 的粉丝数量", userId);
+        try {
+            int count = followService.getFollowerCount(userId);
+            return Result.success(count);
+        } catch (Exception e) {
+            log.error("获取粉丝数量失败: 用户 {}", userId, e);
+            return Result.error("获取粉丝数量失败");
+        }
+    }
+
+    @GetMapping("/{userId}/is-following")
+    public Result isFollowing(@PathVariable Long userId) {
+        log.info("检查当前用户是否关注用户 {}", userId);
+        Long currentUserId = BaseContext.get();
+        if (currentUserId != ERROR_CODE) {
+            boolean isFollowing = followService.isFollowing(currentUserId, userId);
+            return Result.success(isFollowing);
+        }
+        return Result.error("验证失败,非法访问");
+    }
+
+
+
+
 
     @PutMapping("/user/profile")
     public Result updateUserProfile(@RequestBody UserUpdateDTO userUpdateDTO) {
@@ -121,6 +218,18 @@ public class UserController {
             return Result.success("个人信息更新成功");
         }
         return Result.error("验证失败,非法访问");
+    }
+
+    @DeleteMapping("/{userId}")
+    public Result softDeleteUser(@PathVariable Long userId) {
+        log.info("执行软删除用户操作，用户ID: {}", userId);
+        try {
+            userService.softDeleteUser(userId);
+            return Result.success("用户软删除成功");
+        } catch (Exception e) {
+            log.error("软删除用户失败，用户ID: {}", userId, e);
+            return Result.error("用户软删除失败");
+        }
     }
 
     @PutMapping("/updatepw")

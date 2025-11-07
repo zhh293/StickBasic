@@ -18,4 +18,6 @@ public interface UserService {
     boolean updatePassword(long uid, String oldPassword, String newPassword);
 
     void updateUserProfile(Long id, UserUpdateDTO userUpdateDTO);
+
+    boolean softDeleteUser(Long userId);
 }
