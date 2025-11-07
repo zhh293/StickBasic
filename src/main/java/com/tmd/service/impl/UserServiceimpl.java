@@ -84,7 +84,6 @@ public class UserServiceimpl implements UserService, UserDetailsService {
             return userProfile;
         }else{
             //生成书签
-
             messageProducer.sendDirectMessage(userId, true);
             userProfile.setIsFirst(true);
             return userProfile;

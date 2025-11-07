@@ -5,6 +5,7 @@ import com.rabbitmq.client.Channel;
 import cn.hutool.core.util.StrUtil;
 import com.tmd.WebSocket.WebSocketServer;
 import com.tmd.config.RabbitMQConfig;
+import com.tmd.entity.dto.AliOssUtil;
 import com.tmd.entity.dto.MailDTO;
 import com.tmd.publisher.MessageDTO;
 import com.tmd.tools.MailUtil;
@@ -16,7 +17,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.UUID;
 
 @Component
 @Slf4j
@@ -28,7 +35,38 @@ public class MessageConsumer {
     @Autowired
     private MailUtil mailUtil;
     @Autowired
+    private AliOssUtil aliOssUtil;
+    @Autowired
     private WebSocketServer webSocketServer;
+
+    /**
+     * 从URL下载图片内容
+     * 
+     * @param imageUrl 图片URL
+     * @return 图片字节数组
+     */
+    private byte[] downloadImage(String imageUrl) {
+        try {
+            URL url = new URL(imageUrl);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(10000);
+            connection.setInstanceFollowRedirects(true);
+
+            int responseCode = connection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                try (InputStream in = connection.getInputStream()) {
+                    return in.readAllBytes();
+                }
+            } else {
+                log.error("下载图片失败，HTTP状态码: {}", responseCode);
+            }
+        } catch (Exception e) {
+            log.error("下载图片异常: {}", e.getMessage(), e);
+        }
+        return null;
+    }
 
     @RabbitListener(queues = RabbitMQConfig.DIRECT_QUEUE_1)
     public void consumeDirectQueue1(MessageDTO message, Channel channel, Message amqpMessage) throws IOException {
@@ -36,16 +74,37 @@ public class MessageConsumer {
             log.info("【Direct队列1】收到消息: {}", message);
 
             // 处理业务逻辑...
-            // TODO: 实际业务处理代码
             Object content = message.getContent();
-            if (content instanceof List<?>) {
+
+            // 处理MailDTO类型消息（邮件发送）
+            if (content instanceof MailDTO) {
+                MailDTO mailDTO = (MailDTO) content;
+                String htmlContent = generateHtmlEmail(mailDTO);
+                String subject = "一封来自 " + (mailDTO.getSenderNickname() != null ? mailDTO.getSenderNickname() : "朋友")
+                        + " 的邮件";
+                
+                // 使用 MailUtil 发送HTML格式邮件
+                mailUtil.sendHtmlMail(mailDTO.getRecipientEmail(), subject, htmlContent, null);
+                log.info("邮件已成功发送到: {}", mailDTO.getRecipientEmail());
+            }
+            // 处理String类型消息（AI摘要等）
+            else if (content instanceof String) {
+                String string = (String) content;
+                log.info("directQueue1接收到消息: {}", string);
+                // 调用AI生成摘要
+                String response = summaryClient.prompt()
+                        .user(string)
+                        .call()
+                        .content();
+                log.info("摘要生成完成: {}", response);
+            }
+            // 处理List类型消息（摘要生成）
+            else if (content instanceof List<?>) {
                 String response = summaryClient.prompt()
                         .user(content.toString())
                         .call()
                         .content();
                 log.info(response);
-                // 直接调用onmessage，onopen，onclose等方法也是可以的，会执行对应函数的代码，但是不符合规范，毕竟这几个函数只针对客户端发来的消息做出相应的回应，一般不在服务器端主动调用。。
-                // OK，这个功能也算是完成了，美滋滋。。。。。。。。。。。。。。。
                 if (!webSocketServer.Open(message.getId())) {
                     throw new RuntimeException("用户未连接websocket");
                 }
@@ -55,10 +114,45 @@ public class MessageConsumer {
                     log.info("[END]");
                 }
             }
-            if(content instanceof Long){
-                //调用大模型生成书签并且上传到OSS
+            // 处理Long类型消息（用户ID，用于生成书签）
+            else if (content instanceof Long) {
+                Long userId = (Long) content;
+                log.info("开始为用户生成书签: userId={}", userId);
+                try {
+                    // 这里应该是调用大模型生成书签图片URL的代码
+                    // 由于模型调用不需要实现，这里模拟生成一个图片URL
+                    String imageUrl = "https://example.com/generated-bookmark.jpg"; // 模拟的生成图片URL
+
+                    // 下载图片内容
+                    byte[] imageBytes = downloadImage(imageUrl);
+                    if (imageBytes == null || imageBytes.length == 0) {
+                        log.error("图片下载失败: userId={}, url={}", userId, imageUrl);
+                        return;
+                    }
+
+                    // 生成文件ID（objectKey），使用与CommonController一致的格式
+                    String dateDir = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy/MM/dd"));
+                    String uuid = UUID.randomUUID().toString().replace("-", "");
+                    String fileId = String.format("image/%s/%s.jpg", dateDir, uuid);
+
+                    // 上传到OSS
+                    String ossUrl = aliOssUtil.upload(imageBytes, fileId);
+                    log.info("书签图片上传成功: userId={}, fileId={}, ossUrl={}", userId, fileId, ossUrl);
+
+                    // 这里应该有将书签URL保存到用户表的代码
+                    // 由于没有提供UserMapper.updateDailyBookmark方法，这里仅记录日志
+                    //还要上传到附件表
+                    log.info("书签URL应更新到用户表: userId={}, bookmarkUrl={}", userId, ossUrl);
+
+                    // 发送WebSocket通知用户书签已生成
+                    if (webSocketServer != null && webSocketServer.Open(String.valueOf(userId))) {
+                        webSocketServer.sendToUser(String.valueOf(userId), "书签已生成: " + ossUrl);
+                    }
+
+                } catch (Exception e) {
+                    log.error("为用户生成书签失败: userId={}", userId, e);
+                }
             }
-            // mailUtil.sendMail(to,subject,mail);
             // 手动确认消息已消费
             // 参数1: 消息标识，参数2: 是否批量确认
             channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);

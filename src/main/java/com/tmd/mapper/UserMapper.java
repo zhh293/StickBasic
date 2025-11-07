@@ -21,7 +21,7 @@ public interface UserMapper {
     @Select("select * from users where username=#{username};")
     UserData check(String name);
 
-    @Select("select nickname,avatar from users where id=#{userId};")
+    @Select("select username, nickname, avatar, email, daily_bookmark as dailyBookmark, homepage_background as homepageBackground, personal_signature as personalSignature, status, account_days as accountDays from users where id=#{userId};")
     UserProfile getProfile(Long userId);
 
     UserData findByUserIdAndPassword(@Param("uid") long uid, @Param("oldPassword") String oldPassword);
