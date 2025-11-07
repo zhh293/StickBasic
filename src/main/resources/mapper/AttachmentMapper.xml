@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tmd.mapper.AttachmentMapper">
+
+    <resultMap id="AttachmentResultMap" type="com.tmd.entity.dto.Attachment">
+        <id property="id" column="id"/>
+        <result property="fileId" column="file_id"/>
+        <result property="fileUrl" column="file_url"/>
+        <result property="fileName" column="file_name"/>
+        <result property="fileSize" column="file_size"/>
+        <result property="fileType" column="file_type"/>
+        <result property="mimeType" column="mime_type"/>
+        <result property="businessType" column="business_type"/>
+        <result property="businessId" column="business_id"/>
+        <result property="uploaderId" column="uploader_id"/>
+        <result property="uploadTime" column="upload_time"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <!-- 批量插入附件 -->
+    <insert id="batchInsert" parameterType="java.util.List">
+        INSERT INTO attachment (file_id, file_url, file_name, file_size, file_type, mime_type,
+                                 business_type, business_id, uploader_id, upload_time, created_at, updated_at)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.fileId}, #{item.fileUrl}, #{item.fileName}, #{item.fileSize}, #{item.fileType}, #{item.mimeType},
+             #{item.businessType}, #{item.businessId}, #{item.uploaderId}, #{item.uploadTime}, #{item.createdAt}, #{item.updatedAt})
+        </foreach>
+    </insert>
+
+</mapper>
+

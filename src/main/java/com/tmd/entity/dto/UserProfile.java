@@ -4,6 +4,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
+
 /**
  * @Description
  * @Author Bluegod
@@ -13,6 +15,14 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class UserProfile {
+    private String username;
     private String nickname;
     private String avatar;
+    private String email;
+    private String dailyBookmark;
+    private String homepageBackground;
+    private String personalSignature;
+    private UserStatus status;
+    private Integer accountDays;
+    private Boolean isFirst;
 }

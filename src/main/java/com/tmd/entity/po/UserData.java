@@ -17,4 +17,5 @@ public class UserData extends UserVO {
     private String avatar;//头像url
     private String token;//令牌
     private String password;
+    private String email;
 }

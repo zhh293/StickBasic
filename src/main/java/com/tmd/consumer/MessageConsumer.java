@@ -55,6 +55,9 @@ public class MessageConsumer {
                     log.info("[END]");
                 }
             }
+            if(content instanceof Long){
+                //调用大模型生成书签并且上传到OSS
+            }
             // mailUtil.sendMail(to,subject,mail);
             // 手动确认消息已消费
             // 参数1: 消息标识，参数2: 是否批量确认

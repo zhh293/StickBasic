@@ -28,6 +28,13 @@ public class MessageProducer {
             message.setSendTime(LocalDateTime.now());
             message.setType("direct");
         }
+        if(content instanceof Long){
+            message.setId(content.toString());
+            message.setContent(content);
+            message.setType("direct");
+            message.setSendTime(LocalDateTime.now());
+            message.setTopicExchange(RabbitMQConfig.DIRECT_EXCHANGE);
+        }
         // 根据参数选择不同的路由键
         String routingKey = isRoutingKey1 ? RabbitMQConfig.DIRECT_ROUTING_KEY_1 : RabbitMQConfig.DIRECT_ROUTING_KEY_2;
 

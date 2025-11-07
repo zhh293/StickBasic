@@ -1,15 +1,18 @@
 package com.tmd.controller;
 
+import cn.hutool.json.JSONUtil;
 import com.tmd.entity.dto.Result;
 import com.tmd.entity.dto.StickVO;
 import com.tmd.entity.dto.UserProfile;
 import com.tmd.entity.dto.UserVO;
+import com.tmd.entity.po.LoginUser;
 import com.tmd.entity.po.UserData;
 import com.tmd.service.UserService;
 import com.tmd.tools.JwtUtil;
 import com.tmd.tools.SimpleTools;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.*;
 
@@ -23,11 +26,17 @@ public class UserController {
     @Autowired
     private UserService userService;
 
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
     @PostMapping("/register")
     public Result register(@RequestBody UserData userData) {
         log.info("用户正在注册:{}", userData.getUsername());
         if(userService.register(userData)) {
             userData.setToken(JwtUtil.makeToken(userData.getId()));
+            LoginUser loginUser = new LoginUser(userData);
+            stringRedisTemplate.opsForValue().set("login:"+userData.getToken(), JSONUtil.toJsonStr(loginUser));
+            log.info("用户{}注册成功,生成token:{},并且信息存入redis当中了", userData.getUsername(), userData.getToken());
             return Result.success(new UserVO(userData));
         }
         return Result.error("注册失败,用户已注册");
@@ -38,9 +47,8 @@ public class UserController {
         log.info("用户正在登录:{}", userData.getUsername());
         userData = userService.login(userData);
         if(userData != null){
-
             log.info("用户登录成功:{}", userData.getUsername());
-            return Result.success(new UserVO(userData));
+            return Result.success(userData.getToken());
         }
         log.info("用户登录失败:{},{}", userData.getUsername(),userData.getPassword());
         return Result.error("用户名或密码错误");

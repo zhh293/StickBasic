@@ -1,5 +1,6 @@
 package com.tmd.service.impl;
 
+import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson.JSONObject;
 import com.tmd.config.RedisCache;
 import com.tmd.entity.dto.Result;
@@ -7,6 +8,7 @@ import com.tmd.entity.dto.UserProfile;
 import com.tmd.entity.po.LoginUser;
 import com.tmd.entity.po.UserData;
 import com.tmd.mapper.UserMapper;
+import com.tmd.publisher.MessageProducer;
 import com.tmd.service.UserService;
 import com.tmd.tools.JwtUtil;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +40,9 @@ public class UserServiceimpl implements UserService, UserDetailsService {
 
     @Autowired
     private RedisCache redisCache;
+
+    @Autowired
+    private MessageProducer messageProducer;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -72,7 +77,18 @@ public class UserServiceimpl implements UserService, UserDetailsService {
 
     @Override
     public UserProfile getProfile(Long userId) {
-        return userMapper.getProfile(userId);
+        UserProfile userProfile = userMapper.getProfile(userId);
+        String dailyBookmark = userProfile.getDailyBookmark();
+        if(StrUtil.isNotBlank(dailyBookmark)){
+            userProfile.setIsFirst(false);
+            return userProfile;
+        }else{
+            //生成书签
+
+            messageProducer.sendDirectMessage(userId, true);
+            userProfile.setIsFirst(true);
+            return userProfile;
+        }
     }
 
     @Override
