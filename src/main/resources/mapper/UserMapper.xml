@@ -10,22 +10,19 @@
     <update id="update">
         update users
         <set>
-            <if test="username != null">
-                username = #{username},
+            <if test="userUpdateDTO.homepageBackground != null">
+                homepage_background = #{userUpdateDTO.homepageBackground},
             </if>
-            <if test="password != null">
-                password = #{password},
+            <if test="userUpdateDTO.personalSignature != null">
+                personal_signature = #{userUpdateDTO.personalSignature},
             </if>
-            <if test="nickname != null">
-                nickname = #{nickname},
-            </if>
-            <if test="avatar != null">
-                avatar = #{avatar},
+            <if test="userUpdateDTO.avatar != null">
+                avatar = #{userUpdateDTO.avatar},
             </if>
         </set>
         where id = #{id}
     </update>
-    
+
     <update id="updatePassword">
         update users set password=#{newPassword} where id=#{uid} and password=#{oldPassword}
     </update>

@@ -14,6 +14,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -38,6 +39,9 @@ public class MessageConsumer {
     private AliOssUtil aliOssUtil;
     @Autowired
     private WebSocketServer webSocketServer;
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
 
     /**
      * 从URL下载图片内容
@@ -139,10 +143,10 @@ public class MessageConsumer {
                     String ossUrl = aliOssUtil.upload(imageBytes, fileId);
                     log.info("书签图片上传成功: userId={}, fileId={}, ossUrl={}", userId, fileId, ossUrl);
 
-                    // 这里应该有将书签URL保存到用户表的代码
-                    // 由于没有提供UserMapper.updateDailyBookmark方法，这里仅记录日志
-                    //还要上传到附件表
-                    log.info("书签URL应更新到用户表: userId={}, bookmarkUrl={}", userId, ossUrl);
+                    //因为更新太频繁了，所以不存数据库了，直接存到redis里面
+                    stringRedisTemplate.opsForValue().set("bookmark:" + userId, ossUrl);
+                    
+                    log.info("书签URL: userId={}, bookmarkUrl={}", userId, ossUrl);
 
                     // 发送WebSocket通知用户书签已生成
                     if (webSocketServer != null && webSocketServer.Open(String.valueOf(userId))) {

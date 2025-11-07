@@ -11,7 +11,6 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @Builder
 public class UserUpdateDTO {
-    private String dailyBookmark;
     private String homepageBackground;
     private String personalSignature;
     private String avatar;

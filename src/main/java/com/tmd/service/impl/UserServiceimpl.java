@@ -5,6 +5,7 @@ import com.alibaba.fastjson.JSONObject;
 import com.tmd.config.RedisCache;
 import com.tmd.entity.dto.Result;
 import com.tmd.entity.dto.UserProfile;
+import com.tmd.entity.dto.UserUpdateDTO;
 import com.tmd.entity.po.LoginUser;
 import com.tmd.entity.po.UserData;
 import com.tmd.mapper.UserMapper;
@@ -78,9 +79,10 @@ public class UserServiceimpl implements UserService, UserDetailsService {
     @Override
     public UserProfile getProfile(Long userId) {
         UserProfile userProfile = userMapper.getProfile(userId);
-        String dailyBookmark = userProfile.getDailyBookmark();
+        String dailyBookmark=redisCache.getCacheObject("bookmark:"+userId);
         if(StrUtil.isNotBlank(dailyBookmark)){
             userProfile.setIsFirst(false);
+            userProfile.setDailyBookmark(dailyBookmark);
             return userProfile;
         }else{
             //生成书签
@@ -99,6 +101,11 @@ public class UserServiceimpl implements UserService, UserDetailsService {
             return false;
         }
         return true;
+    }
+
+    @Override
+    public void updateUserProfile(Long id, UserUpdateDTO userUpdateDTO) {
+        userMapper.update(id, userUpdateDTO);
     }
 
     @Override
