@@ -164,6 +164,13 @@
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-pool2</artifactId>
         </dependency>
+        <!-- WeChat Pay Apache HttpClient SDK (v3) -->
+
+      <dependency>
+          <groupId>com.github.wechatpay-apiv3</groupId>
+          <artifactId>wechatpay-apache-httpclient</artifactId>
+          <version>0.4.8</version>
+      </dependency>
   </dependencies>
 
     <build>

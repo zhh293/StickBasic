@@ -97,4 +97,18 @@ l2cache:
       topic: cache:redis:caffeine:topic
 
 
+wechat:
+  pay:
+    enabled: true
+    mock: true # 开发联调阶段可为 true，生产置为 false
+    app-id: your-app-id
+    mch-id: your-mch-id
+    api-v3-key: your-api-v3-key
+    private-key-path: file:/path/to/your/apiclient_key.pem
+    cert-serial-no: your-cert-serial-no
+    platform-cert-path: file:/path/to/platform_cert.pem
+    notify-url: http://localhost:8080/api/pay/wechat/notify
+    refund-notify-url: http://localhost:8080/api/pay/wechat/refund/notify
+
+
 
