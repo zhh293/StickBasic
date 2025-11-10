@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tmd.mapper.PaymentRefundMapper">
+
+    <resultMap id="PaymentRefundMap" type="com.tmd.entity.PaymentRefund">
+        <id property="id" column="id" />
+        <result property="refundNo" column="refund_no" />
+        <result property="orderNo" column="order_no" />
+        <result property="userId" column="user_id" />
+        <result property="amount" column="amount" />
+        <result property="status" column="status" />
+        <result property="reason" column="reason" />
+        <result property="transactionId" column="transaction_id" />
+        <result property="createdAt" column="created_at" />
+        <result property="updatedAt" column="updated_at" />
+    </resultMap>
+
+    <insert id="insert" parameterType="com.tmd.entity.PaymentRefund" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO payment_refund (
+            refund_no, order_no, user_id, amount, status, reason, transaction_id, created_at, updated_at
+        ) VALUES (
+            #{refundNo}, #{orderNo}, #{userId}, #{amount}, #{status}, #{reason}, #{transactionId}, #{createdAt}, #{updatedAt}
+        )
+    </insert>
+
+    <update id="updateStatus">
+        UPDATE payment_refund SET status = #{status}, updated_at = NOW() WHERE refund_no = #{refundNo}
+    </update>
+
+    <select id="findByRefundNo" parameterType="string" resultMap="PaymentRefundMap">
+        SELECT * FROM payment_refund WHERE refund_no = #{refundNo}
+    </select>
+
+</mapper>

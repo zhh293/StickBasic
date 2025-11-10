@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tmd.mapper.PaymentOrderMapper">
+
+    <resultMap id="PaymentOrderMap" type="com.tmd.entity.PaymentOrder">
+        <id property="id" column="id" />
+        <result property="orderNo" column="order_no" />
+        <result property="userId" column="user_id" />
+        <result property="status" column="status" />
+        <result property="amount" column="amount" />
+        <result property="currency" column="currency" />
+        <result property="description" column="description" />
+        <result property="prepayId" column="prepay_id" />
+        <result property="transactionId" column="transaction_id" />
+        <result property="payTime" column="pay_time" />
+        <result property="refundAmount" column="refund_amount" />
+        <result property="createdAt" column="created_at" />
+        <result property="updatedAt" column="updated_at" />
+    </resultMap>
+
+    <insert id="insert" parameterType="com.tmd.entity.PaymentOrder" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO payment_order (
+            order_no, user_id, status, amount, currency, description, prepay_id, transaction_id, pay_time, refund_amount, created_at, updated_at
+        ) VALUES (
+            #{orderNo}, #{userId}, #{status}, #{amount}, #{currency}, #{description}, #{prepayId}, #{transactionId}, #{payTime}, #{refundAmount}, #{createdAt}, #{updatedAt}
+        )
+    </insert>
+
+    <update id="updateStatus">
+        UPDATE payment_order SET status = #{status}, updated_at = NOW() WHERE order_no = #{orderNo}
+    </update>
+
+    <update id="updateOnPaid">
+        UPDATE payment_order SET status = 'SUCCESS', transaction_id = #{transactionId}, pay_time = NOW(), updated_at = NOW()
+        WHERE order_no = #{orderNo}
+    </update>
+
+    <select id="findByOrderNo" parameterType="string" resultMap="PaymentOrderMap">
+        SELECT * FROM payment_order WHERE order_no = #{orderNo}
+    </select>
+
+    <select id="findByUserId" parameterType="long" resultMap="PaymentOrderMap">
+        SELECT * FROM payment_order WHERE user_id = #{userId} ORDER BY created_at DESC
+    </select>
+
+</mapper>
