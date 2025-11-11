@@ -4,6 +4,7 @@ import com.tmd.entity.dto.Topic;
 import com.tmd.entity.dto.TopicFollowVO;
 import com.tmd.entity.dto.TopicVO;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
@@ -22,4 +23,7 @@ public interface TopicMapper {
 
     @Update("update topic set follower_count = #{followerCount} where id = #{topicId}")
     void updateFollowCount(TopicFollowVO topicFollowVO);
+
+    @Delete("delete from topic where id = #{id}")
+    void deleteById(Long id);
 }

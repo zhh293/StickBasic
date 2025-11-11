@@ -255,6 +255,64 @@ public class AttachmentServiceImpl implements AttachmentService {
     }
 
     @Override
+    public List<Attachment> getAttachmentsByBusinessBatch(String businessType, List<Long> businessIds) {
+        if (businessType == null || businessIds == null || businessIds.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // 去重并过滤空ID
+        java.util.List<Long> ids = businessIds.stream()
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .collect(java.util.stream.Collectors.toList());
+
+        // 先尝试从缓存读取各 businessId 的附件列表
+        java.util.List<Attachment> combined = new java.util.ArrayList<>();
+        java.util.List<Long> missed = new java.util.ArrayList<>();
+        for (Long bid : ids) {
+            String cacheKey = CACHE_KEY_PREFIX_BUSINESS + businessType + ":" + bid;
+            java.util.List<Attachment> cached = redisCache.getCacheList(cacheKey);
+            // 注意：即便缓存是空列表，也视为命中，避免穿透
+            if (cached != null) {
+                combined.addAll(cached);
+            } else {
+                missed.add(bid);
+            }
+        }
+
+        // 对缓存未命中的 businessId，一次性查库并回填缓存
+        if (!missed.isEmpty()) {
+            java.util.List<Attachment> fetched = attachmentMapper.selectByBusinessIds(businessType, missed);
+            if (fetched != null && !fetched.isEmpty()) {
+                java.util.Map<Long, java.util.List<Attachment>> grouped = fetched.stream()
+                        .filter(a -> a.getBusinessId() != null)
+                        .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
+                for (Long bid : missed) {
+                    java.util.List<Attachment> group = grouped.getOrDefault(bid, new java.util.ArrayList<>());
+                    String cacheKey = CACHE_KEY_PREFIX_BUSINESS + businessType + ":" + bid;
+                    try {
+                        redisCache.setCacheList(cacheKey, group);
+                        // 缓存 TTL（与单条方法保持一致）
+                        redisCache.expire(cacheKey, CACHE_EXPIRE_DAYS, TimeUnit.DAYS);
+                    } catch (Exception ignore) {}
+                    combined.addAll(group);
+                }
+            } else {
+                // 防止穿透：为所有 missed 写入空列表缓存（较短过期）
+                for (Long bid : missed) {
+                    String cacheKey = CACHE_KEY_PREFIX_BUSINESS + businessType + ":" + bid;
+                    try {
+                        redisCache.setCacheList(cacheKey, new java.util.ArrayList<>());
+                        redisCache.expire(cacheKey, 1, TimeUnit.HOURS);
+                    } catch (Exception ignore) {}
+                }
+            }
+        }
+
+        return combined;
+    }
+
+    @Override
     public Attachment getAttachmentByFileId(String fileId) {
         if (fileId == null || fileId.trim().isEmpty()) {
             return null;

@@ -8,9 +8,13 @@ import com.tmd.config.RabbitMQConfig;
 import com.tmd.entity.dto.AliOssUtil;
 import com.tmd.entity.dto.MailDTO;
 import com.tmd.publisher.MessageDTO;
+import com.tmd.publisher.TopicModerationMessage;
+import com.tmd.service.AttachmentService;
+import com.tmd.mapper.TopicMapper;
 import com.tmd.tools.MailUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +46,16 @@ public class MessageConsumer {
 
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
+
+    @Autowired
+    private AttachmentService attachmentService;
+
+    @Autowired
+    private TopicMapper topicMapper;
+
+    @Autowired
+    @Qualifier("moderationClient")
+    private ChatClient moderationClient;
 
     /**
      * 从URL下载图片内容
@@ -79,6 +93,52 @@ public class MessageConsumer {
 
             // 处理业务逻辑...
             Object content = message.getContent();
+
+            // 处理话题审核消息
+            if ("topic_moderation".equals(message.getType()) && content instanceof TopicModerationMessage moderationMsg) {
+                Long topicId = moderationMsg.getTopicId();
+                StringBuilder promptBuilder = new StringBuilder();
+                if (StrUtil.isNotBlank(moderationMsg.getName())) {
+                    promptBuilder.append("标题：").append(moderationMsg.getName()).append("\n");
+                }
+                if (StrUtil.isNotBlank(moderationMsg.getDescription())) {
+                    promptBuilder.append("描述：").append(moderationMsg.getDescription());
+                }
+                if (StrUtil.isNotBlank(moderationMsg.getCoverImageUrl())) {
+                    if (promptBuilder.length() > 0) promptBuilder.append("\n\n");
+                    promptBuilder.append("图片URL：").append(moderationMsg.getCoverImageUrl());
+                    promptBuilder.append("\n请访问以上图片URL并审核图片内容。");
+                }
+                String fullPrompt = promptBuilder.toString().trim();
+                int result = 1;
+                try {
+                    if (!fullPrompt.isEmpty()) {
+                        String response = moderationClient.prompt()
+                                .user(fullPrompt)
+                                .call()
+                                .content();
+                        result = parseModerationResult(response);
+                    }
+                } catch (Exception e) {
+                    log.error("话题审核异常，默认拒绝: topicId={}", topicId, e);
+                    result = 0;
+                }
+
+                if (result == 0) {
+                    // 审核不通过：撤回话题与附件，并移除Redis首屏
+                    try {
+                        removeTopicFromRedisZSet(topicId);
+                        attachmentService.deleteAttachmentsByBusiness("topic", topicId);
+                        topicMapper.deleteById(topicId);
+                        log.info("话题审核未通过，已撤回: topicId={}", topicId);
+                    } catch (Exception e) {
+                        log.error("撤回话题失败: topicId={}", topicId, e);
+                    }
+                }
+
+                channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
+                return;
+            }
 
             // 处理MailDTO类型消息（邮件发送）
             if (content instanceof MailDTO) {
@@ -337,6 +397,51 @@ public class MessageConsumer {
                 "    </div>" +
                 "</body>" +
                 "</html>";
+    }
+
+    /**
+     * 解析审核结果字符串为0或1
+     */
+    private int parseModerationResult(String response) {
+        if (response == null) return 0;
+        String resultStr = response.trim().replaceAll("\\s+", "");
+        if (resultStr.matches(".*\\b0\\b.*") && !resultStr.matches(".*\\b10\\b.*")
+                && !resultStr.matches(".*\\b01\\b.*")) {
+            return 0;
+        }
+        if (resultStr.matches(".*\\b1\\b.*")) {
+            return 1;
+        }
+        try {
+            char firstChar = resultStr.charAt(0);
+            if (firstChar == '0' || firstChar == '1') {
+                return Character.getNumericValue(firstChar);
+            }
+            int idx0 = resultStr.indexOf('0');
+            int idx1 = resultStr.indexOf('1');
+            if (idx0 != -1 && (idx1 == -1 || idx0 < idx1)) return 0;
+            if (idx1 != -1) return 1;
+        } catch (Exception ignored) {}
+        return 0;
+    }
+
+    /**
+     * 尝试从 Redis ZSet "topics:all" 中移除指定话题（仅扫描最新200条）
+     */
+    private void removeTopicFromRedisZSet(Long topicId) {
+        String key = "topics:all";
+        java.util.Set<String> recent = stringRedisTemplate.opsForZSet().reverseRange(key, 0, 200);
+        if (recent == null || recent.isEmpty()) return;
+        for (String json : recent) {
+            try {
+                cn.hutool.json.JSONObject obj = cn.hutool.json.JSONUtil.parseObj(json);
+                Long id = obj.getLong("id");
+                if (topicId.equals(id)) {
+                    stringRedisTemplate.opsForZSet().remove(key, json);
+                    break;
+                }
+            } catch (Exception ignored) {}
+        }
     }
 
     /**

@@ -31,6 +31,22 @@ public interface AttachmentMapper {
                         @Param("businessId") Long businessId);
 
         /**
+         * 批量根据业务类型和业务ID列表查询附件
+         */
+        @Select({
+            "<script>",
+            "SELECT * FROM attachment",
+            "WHERE business_type = #{businessType}",
+            "AND business_id IN",
+            "<foreach collection='businessIds' item='id' open='(' separator=',' close=')'>",
+            "#{id}",
+            "</foreach>",
+            "</script>"
+        })
+        List<Attachment> selectByBusinessIds(@Param("businessType") String businessType,
+                        @Param("businessIds") List<Long> businessIds);
+
+        /**
          * 根据文件ID（OSS objectKey）查询附件
          */
         @Select("SELECT * FROM attachment WHERE file_id = #{fileId}")

@@ -28,6 +28,7 @@ import org.springframework.util.StringUtils;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 @Service
 @Slf4j
@@ -78,7 +79,16 @@ public class UserServiceimpl implements UserService, UserDetailsService {
 
     @Override
     public UserProfile getProfile(Long userId) {
-        UserProfile userProfile = userMapper.getProfile(userId);
+        // 优先从缓存读取基础资料
+        String profileKey = "user:profile:" + userId;
+        UserProfile userProfile = redisCache.getCacheObject(profileKey);
+        if (userProfile == null) {
+            userProfile = userMapper.getProfile(userId);
+            if (userProfile != null) {
+                // 缓存基础资料 10 分钟，避免频繁 DB 访问
+                redisCache.setCacheObject(profileKey, userProfile, 600, TimeUnit.SECONDS);
+            }
+        }
         String dailyBookmark=redisCache.getCacheObject("bookmark:"+userId);
         if(StrUtil.isNotBlank(dailyBookmark)){
             userProfile.setIsFirst(false);
@@ -106,6 +116,10 @@ public class UserServiceimpl implements UserService, UserDetailsService {
     @Override
     public void updateUserProfile(Long id, UserUpdateDTO userUpdateDTO) {
         userMapper.update(id, userUpdateDTO);
+        // 更新资料后主动失效缓存，确保读取到最新信息
+        try {
+            redisCache.deleteObject("user:profile:" + id);
+        } catch (Exception ignore) {}
     }
 
     @Override

@@ -6,5 +6,9 @@ public interface SearchService {
     Result search(String keyword,
                   String type,
                   Integer page,
-                  Integer size);
+                  Integer size,
+                  String sort,
+                  Long topicId,
+                  Long startTime,
+                  Long endTime);
 }

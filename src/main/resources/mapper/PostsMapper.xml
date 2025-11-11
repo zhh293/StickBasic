@@ -2,6 +2,42 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.tmd.mapper.PostsMapper">
 
+    <insert id="insert" parameterType="com.tmd.entity.dto.Post" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO posts (
+            user_id,
+            topic_id,
+            title,
+            content,
+            post_type,
+            status,
+            like_count,
+            comment_count,
+            share_count,
+            view_count,
+            publish_location,
+            latitude,
+            longitude,
+            created_at,
+            updated_at
+        ) VALUES (
+            #{userId},
+            #{topicId},
+            #{title},
+            #{content},
+            #{postType},
+            #{status},
+            #{likeCount},
+            #{commentCount},
+            #{shareCount},
+            #{viewCount},
+            #{publishLocation},
+            #{latitude},
+            #{longitude},
+            #{createdAt},
+            #{updatedAt}
+        )
+    </insert>
+
     <select id="selectPage" resultType="com.tmd.entity.dto.Post">
         SELECT id,
                user_id AS userId,
@@ -52,6 +88,52 @@
         </where>
     </select>
 
+    <select id="selectPageByTopic" resultType="com.tmd.entity.dto.Post">
+        SELECT id,
+               user_id AS userId,
+               topic_id AS topicId,
+               title,
+               content,
+               post_type AS postType,
+               status,
+               like_count AS likeCount,
+               comment_count AS commentCount,
+               share_count AS shareCount,
+               view_count AS viewCount,
+               publish_location AS publishLocation,
+               latitude,
+               longitude,
+               created_at AS createdAt,
+               updated_at AS updatedAt
+        FROM posts
+        <where>
+            AND topic_id = #{topicId}
+            <if test="status != null and status != ''">
+                AND status = #{status}
+            </if>
+        </where>
+        <choose>
+            <when test="sort == 'hot'">
+                ORDER BY view_count DESC, created_at DESC
+            </when>
+            <otherwise>
+                ORDER BY created_at DESC
+            </otherwise>
+        </choose>
+        LIMIT #{offset}, #{size}
+    </select>
+
+    <select id="countByTopic" resultType="long">
+        SELECT COUNT(1)
+        FROM posts
+        <where>
+            AND topic_id = #{topicId}
+            <if test="status != null and status != ''">
+                AND status = #{status}
+            </if>
+        </where>
+    </select>
+
     <!-- 最新排序用于滚动分页：只取 id 与 created_at，限定上限以避免一次性加载过多 -->
     <select id="selectLatestIds" resultType="com.tmd.entity.dto.Post">
         SELECT id,
@@ -93,5 +175,30 @@
             #{id}
         </foreach>
     </select>
+
+    <select id="selectById" resultType="com.tmd.entity.dto.Post">
+        SELECT id,
+               user_id AS userId,
+               topic_id AS topicId,
+               title,
+               content,
+               post_type AS postType,
+               status,
+               like_count AS likeCount,
+               comment_count AS commentCount,
+               share_count AS shareCount,
+               view_count AS viewCount,
+               publish_location AS publishLocation,
+               latitude,
+               longitude,
+               created_at AS createdAt,
+               updated_at AS updatedAt
+        FROM posts
+        WHERE id = #{id}
+    </select>
+
+    <delete id="deleteById">
+        DELETE FROM posts WHERE id = #{id}
+    </delete>
 
 </mapper>

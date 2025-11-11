@@ -28,6 +28,11 @@ public interface AttachmentService {
     List<Attachment> getAttachmentsByBusiness(String businessType, Long businessId);
 
     /**
+     * 批量根据业务类型与业务ID列表获取附件（单次IO）
+     */
+    List<Attachment> getAttachmentsByBusinessBatch(String businessType, List<Long> businessIds);
+
+    /**
      * 根据文件ID获取附件
      */
     Attachment getAttachmentByFileId(String fileId);

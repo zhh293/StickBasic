@@ -38,4 +38,13 @@ public class TopicController {
     public Result getTopicFollowers(@PathVariable Integer topicId,@RequestParam(defaultValue = "1") Integer page, @RequestParam(defaultValue = "10") Integer size){
         return topicService.getTopicFollowers(topicId,page, size);
     }
+
+    @GetMapping("/{topicId}/posts")
+    public Result getTopicPosts(@PathVariable Integer topicId,
+                                @RequestParam(defaultValue = "1") Integer page,
+                                @RequestParam(defaultValue = "10") Integer size,
+                                @RequestParam(required = false, defaultValue = "latest") String sort,
+                                @RequestParam(required = false) String status) throws InterruptedException {
+        return topicService.getTopicPosts(topicId, page, size, sort, status);
+    }
 }

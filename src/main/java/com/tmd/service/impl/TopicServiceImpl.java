@@ -8,10 +8,14 @@ import com.github.pagehelper.PageHelper;
 import com.tmd.config.ThreadPoolConfig;
 import com.tmd.entity.dto.*;
 import com.tmd.mapper.AttachmentMapper;
+import com.tmd.mapper.PostsMapper;
 import com.tmd.mapper.TopicFollowMapper;
 import com.tmd.mapper.TopicMapper;
+import com.tmd.mapper.UserMapper;
 import com.tmd.service.TopicService;
 import com.tmd.tools.BaseContext;
+import com.tmd.publisher.MessageProducer;
+import com.tmd.publisher.TopicModerationMessage;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.ai.chat.client.ChatClient;
@@ -47,8 +51,26 @@ public class TopicServiceImpl implements TopicService {
     private AttachmentMapper attachmentMapper;
 
     @Autowired
+    private PostsMapper postsMapper;
+
+    @Autowired
+    private com.tmd.service.AttachmentService attachmentService;
+
+    @Autowired
+    private UserMapper userMapper;
+
+    @Autowired
     @Qualifier("moderationClient")
     private ChatClient moderationClient;
+
+    @Autowired
+    private MessageProducer messageProducer;
+
+    private static final String TOPIC_POSTS_LIST_KEY_FMT = "topic:post:list:%d:%s:%s:%d:%d"; // topicId:status:sort:page:size
+    private static final String TOPIC_POSTS_TOTAL_KEY_FMT = "topic:post:total:%d:%s:%s"; // topicId:status:sort
+    private static final long TOPIC_LIST_TTL_SECONDS = 60; // 列表缓存TTL
+    private static final long TOPIC_TOTAL_TTL_SECONDS = 300; // 总数缓存TTL
+    private static final long TOPIC_BY_ID_TTL_SECONDS = 300; // 话题按ID缓存TTL
 
     @Override
     public Result getAllTopics(Integer page, Integer size, String status) throws InterruptedException {
@@ -100,146 +122,71 @@ public class TopicServiceImpl implements TopicService {
     }
 
     @Override
-    public Result createTopic(TopicDTO topic) {
-        // 让ai进行审核。如果内容和图像什么的都可以的话，就返回1，否则的话返回零
+    public TopicVO getTopicCachedById(Integer topicId) {
+        if (topicId == null || topicId <= 0) return null;
         try {
-            // 构建审核文本内容
-            StringBuilder contentBuilder = new StringBuilder();
-            if (topic.getName() != null && !topic.getName().trim().isEmpty()) {
-                contentBuilder.append("标题：").append(topic.getName()).append("\n");
+            String cacheKey = "topic:id:" + topicId;
+            String cached = stringRedisTemplate.opsForValue().get(cacheKey);
+            if (cached != null && !cached.isEmpty()) {
+                return JSONUtil.toBean(cached, TopicVO.class);
             }
-            if (topic.getDescription() != null && !topic.getDescription().trim().isEmpty()) {
-                contentBuilder.append("描述：").append(topic.getDescription());
+            TopicVO vo = topicMapper.getTopicById(topicId);
+            if (vo != null) {
+                stringRedisTemplate.opsForValue().set(cacheKey, JSONUtil.toJsonStr(vo), TOPIC_BY_ID_TTL_SECONDS, TimeUnit.SECONDS);
+            } else {
+                // 防止穿透，缓存空字符串，短TTL
+                stringRedisTemplate.opsForValue().set(cacheKey, "", 60, TimeUnit.SECONDS);
             }
-            String textContent = contentBuilder.toString().trim();
+            return vo;
+        } catch (Exception e) {
+            log.warn("Get topic by id with cache failed: id={}", topicId, e);
+            return topicMapper.getTopicById(topicId);
+        }
+    }
 
-            // 构建完整的审核提示，包含文本和图片URL
-            StringBuilder promptBuilder = new StringBuilder();
-            if (!textContent.isEmpty()) {
-                promptBuilder.append(textContent);
-            }
-            if (topic.getCoverImage() != null && !topic.getCoverImage().trim().isEmpty()) {
-                if (promptBuilder.length() > 0) {
-                    promptBuilder.append("\n\n");
-                }
-                promptBuilder.append("图片URL：").append(topic.getCoverImage());
-                promptBuilder.append("\n请访问以上图片URL并审核图片内容。");
-            }
-
-            String fullPrompt = promptBuilder.toString().trim();
-            if (fullPrompt.isEmpty()) {
+    @Override
+    public Result createTopic(TopicDTO topic) {
+        try {
+            // 基础校验：至少需要文本或图片之一
+            boolean hasText = topic.getName() != null && !topic.getName().trim().isEmpty()
+                    || topic.getDescription() != null && !topic.getDescription().trim().isEmpty();
+            boolean hasImage = topic.getCoverImage() != null && !topic.getCoverImage().trim().isEmpty();
+            if (!hasText && !hasImage) {
                 return Result.error("话题内容不能为空");
             }
 
-            // 调用AI进行审核
-            String response = moderationClient.prompt()
-                    .user(fullPrompt)
-                    .call()
-                    .content();
+            Long uploaderId = BaseContext.get();
+            String coverImageUrl = topic.getCoverImage();
 
-            // 解析返回结果，移除空白字符后提取数字
-            String resultStr = response.trim().replaceAll("\\s+", "");
-            int result = -1;
+            // 先入库
+            Topic topicEntity = Topic.builder()
+                    .createdAt(LocalDateTime.now())
+                    .coverImage(coverImageUrl)
+                    .description(topic.getDescription())
+                    .updatedAt(LocalDateTime.now())
+                    .name(topic.getName())
+                    .userId(uploaderId)
+                    .build();
+            topicMapper.insert(topicEntity);
+            Long topicId = topicEntity.getId();
 
-            // 尝试从响应中提取0或1
-            // 优先查找独立的0或1（前面或后面没有其他数字）
-            if (resultStr.matches(".*\\b0\\b.*") && !resultStr.matches(".*\\b10\\b.*")
-                    && !resultStr.matches(".*\\b01\\b.*")) {
-                result = 0;
-            } else if (resultStr.matches(".*\\b1\\b.*")) {
-                result = 1;
-            } else {
-                // 如果无法匹配，尝试直接解析第一个字符
+            // 保存封面附件关联（如有）
+            if (coverImageUrl != null && !coverImageUrl.trim().isEmpty()) {
                 try {
-                    char firstChar = resultStr.charAt(0);
-                    if (firstChar == '0' || firstChar == '1') {
-                        result = Character.getNumericValue(firstChar);
-                    } else {
-                        // 查找字符串中的第一个0或1
-                        int idx0 = resultStr.indexOf('0');
-                        int idx1 = resultStr.indexOf('1');
-                        if (idx0 != -1 && (idx1 == -1 || idx0 < idx1)) {
-                            result = 0;
-                        } else if (idx1 != -1) {
-                            result = 1;
-                        } else {
-                            // 如果还是无法解析，默认返回0（拒绝）
-                            result = 0;
-                        }
-                    }
-                } catch (Exception e) {
-                    // 如果还是无法解析，默认返回0（拒绝）
-                    result = 0;
-                }
-            }
-
-            // 根据审核结果返回
-            if (result == 1) {
-                // 审核通过，可以继续处理话题创建逻辑
-                Long uploaderId = BaseContext.get();
-                String coverImageUrl = topic.getCoverImage();
-
-                // 创建话题实体
-                Topic topicEntity = Topic.builder()
-                        .createdAt(LocalDateTime.now())
-                        .coverImage(coverImageUrl)
-                        .description(topic.getDescription())
-                        .updatedAt(LocalDateTime.now())
-                        .name(topic.getName())
-                        .userId(uploaderId)
-                        .build();
-                topicMapper.insert(topicEntity);
-                Long topicId = topicEntity.getId();
-
-                // 如果有封面图片，保存附件关联到 attachment 表
-                // 封面图片一定是通过 /common/upload 上传的，从 URL 中提取 fileId
-                if (coverImageUrl != null && !coverImageUrl.trim().isEmpty()) {
-                    try {
-                        // 从 URL 中提取 fileId（objectKey）
-                        // OSS URL 格式：https://bucket.endpoint/objectKey
-                        String fileId = extractFileIdFromUrl(coverImageUrl);
-
-                        if (fileId != null) {
-                            // 查询附件是否已存在（可能通过 /common/upload/attach 已保存）
-                            Attachment existingAttachment = attachmentMapper.selectByFileId(fileId);
-
-                            if (existingAttachment != null) {
-                                // 附件已存在，创建新的关联记录（如果还没有关联到当前话题）
-                                if (existingAttachment.getBusinessId() == null ||
-                                        !existingAttachment.getBusinessId().equals(topicId) ||
-                                        !"topic".equals(existingAttachment.getBusinessType())) {
-
-                                    // 创建新的附件关联记录
-                                    Attachment newAttachment = Attachment.builder()
-                                            .fileId(existingAttachment.getFileId())
-                                            .fileUrl(existingAttachment.getFileUrl())
-                                            .fileName(existingAttachment.getFileName())
-                                            .fileSize(existingAttachment.getFileSize())
-                                            .fileType(existingAttachment.getFileType())
-                                            .mimeType(existingAttachment.getMimeType())
-                                            .businessType("topic")
-                                            .businessId(topicId)
-                                            .uploaderId(uploaderId)
-                                            .uploadTime(LocalDateTime.now())
-                                            .createdAt(LocalDateTime.now())
-                                            .updatedAt(LocalDateTime.now())
-                                            .build();
-
-                                    attachmentMapper.insert(newAttachment);
-                                }
-                            } else {
-                                // 附件不存在，说明只用了 /common/upload 没有保存到数据库
-                                // 创建附件记录（从 URL 和 fileId 推断信息）
-                                String fileName = extractFileNameFromFileId(fileId);
-                                String fileType = extractFileTypeFromFileId(fileId);
-
+                    String fileId = extractFileIdFromUrl(coverImageUrl);
+                    if (fileId != null) {
+                        Attachment existingAttachment = attachmentMapper.selectByFileId(fileId);
+                        if (existingAttachment != null) {
+                            if (existingAttachment.getBusinessId() == null ||
+                                    !existingAttachment.getBusinessId().equals(topicId) ||
+                                    !"topic".equals(existingAttachment.getBusinessType())) {
                                 Attachment newAttachment = Attachment.builder()
-                                        .fileId(fileId)
-                                        .fileUrl(coverImageUrl)
-                                        .fileName(fileName != null ? fileName : "cover_image")
-                                        .fileSize(null) // 无法获取，设为null
-                                        .fileType(fileType != null ? fileType : "image")
-                                        .mimeType(detectMimeTypeFromFileName(fileName))
+                                        .fileId(existingAttachment.getFileId())
+                                        .fileUrl(existingAttachment.getFileUrl())
+                                        .fileName(existingAttachment.getFileName())
+                                        .fileSize(existingAttachment.getFileSize())
+                                        .fileType(existingAttachment.getFileType())
+                                        .mimeType(existingAttachment.getMimeType())
                                         .businessType("topic")
                                         .businessId(topicId)
                                         .uploaderId(uploaderId)
@@ -247,28 +194,51 @@ public class TopicServiceImpl implements TopicService {
                                         .createdAt(LocalDateTime.now())
                                         .updatedAt(LocalDateTime.now())
                                         .build();
-
                                 attachmentMapper.insert(newAttachment);
                             }
+                        } else {
+                            String fileName = extractFileNameFromFileId(fileId);
+                            String fileType = extractFileTypeFromFileId(fileId);
+                            Attachment newAttachment = Attachment.builder()
+                                    .fileId(fileId)
+                                    .fileUrl(coverImageUrl)
+                                    .fileName(fileName != null ? fileName : "cover_image")
+                                    .fileSize(null)
+                                    .fileType(fileType != null ? fileType : "image")
+                                    .mimeType(detectMimeTypeFromFileName(fileName))
+                                    .businessType("topic")
+                                    .businessId(topicId)
+                                    .uploaderId(uploaderId)
+                                    .uploadTime(LocalDateTime.now())
+                                    .createdAt(LocalDateTime.now())
+                                    .updatedAt(LocalDateTime.now())
+                                    .build();
+                            attachmentMapper.insert(newAttachment);
                         }
-                    } catch (Exception e) {
-                        // 附件关联失败不影响话题创建，只记录日志
-                        log.error("保存话题封面图片附件关联失败", e);
-                        throw new RuntimeException("保存话题封面图片附件关联失败");
                     }
+                } catch (Exception e) {
+                    log.error("保存话题封面图片附件关联失败", e);
+                    throw new RuntimeException("保存话题封面图片附件关联失败");
                 }
-
-                // 加入redis
-                String key = "topics:all";
-                stringRedisTemplate.opsForZSet().add(key, JSONUtil.toJsonStr(topicEntity), System.currentTimeMillis());
-                return Result.success("审核通过，话题创建成功");
-            } else {
-                // 审核不通过
-                return Result.error("内容审核未通过，包含违规内容");
             }
+
+            // 写入Redis首屏集合
+            String key = "topics:all";
+            stringRedisTemplate.opsForZSet().add(key, JSONUtil.toJsonStr(topicEntity), System.currentTimeMillis());
+
+            // 异步审核：发布消息到队列
+            TopicModerationMessage payload = TopicModerationMessage.builder()
+                    .topicId(topicId)
+                    .name(topic.getName())
+                    .description(topic.getDescription())
+                    .coverImageUrl(coverImageUrl)
+                    .uploaderId(uploaderId)
+                    .build();
+            messageProducer.sendTopicModeration(payload);
+
+            return Result.success("话题已创建，正在审核中。如未通过将自动撤回");
         } catch (Exception e) {
-            // 审核过程中出现异常，为了安全起见，拒绝创建
-            return Result.error("审核服务异常，无法创建话题");
+            return Result.error("服务器错误，创建失败");
         }
     }
 
@@ -315,6 +285,123 @@ public class TopicServiceImpl implements TopicService {
         PageHelper.startPage(page, size);
         Page<TopicFollowVO> page1 = topicFollowMapper.getTopicFollowers(topicId);
         PageResult pageResult = new PageResult(page1.getTotal(), page1.getResult());
+        return Result.success(pageResult);
+    }
+
+    @Override
+    public Result getTopicPosts(Integer topicId,
+            Integer page,
+            Integer size,
+            String sort,
+            String status) throws InterruptedException {
+        if (topicId == null || topicId <= 0) {
+            return Result.error("话题ID不能为空");
+        }
+        if (page == null || page < 1)
+            page = 1;
+        if (size == null || size < 1)
+            size = 10;
+        if (cn.hutool.core.util.StrUtil.isBlank(sort))
+            sort = "latest";
+
+        String statusKey = cn.hutool.core.util.StrUtil.isBlank(status) ? "-" : status;
+        String listKey = String.format(TOPIC_POSTS_LIST_KEY_FMT, topicId, statusKey, sort, page, size);
+        String totalKey = String.format(TOPIC_POSTS_TOTAL_KEY_FMT, topicId, statusKey, sort);
+
+        // 读缓存
+        String cachedListJson = stringRedisTemplate.opsForValue().get(listKey);
+        if (cn.hutool.core.util.StrUtil.isNotBlank(cachedListJson)) {
+            java.util.List<PostListItemVO> rows = cn.hutool.json.JSONUtil
+                    .toList(cn.hutool.json.JSONUtil.parseArray(cachedListJson), PostListItemVO.class);
+            Long total = null;
+            String totalStr = stringRedisTemplate.opsForValue().get(totalKey);
+            if (cn.hutool.core.util.StrUtil.isNotBlank(totalStr)) {
+                try {
+                    total = Long.parseLong(totalStr);
+                } catch (Exception ignore) {
+                }
+            }
+            if (total == null)
+                total = (long) rows.size();
+            PageResult pageResult = new PageResult(total, rows);
+            return Result.success(pageResult);
+        }
+
+        // 未命中：尝试加锁，命中锁则同步恢复缓存；无论如何直接查询并返回数据
+        String lockKey = "lock:" + listKey;
+        org.redisson.api.RLock lock = redissonClient.getLock(lockKey);
+        boolean locked = false;
+        try {
+            locked = lock.tryLock(5, 10, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception ignore) {
+        }
+
+        final int offset = (page - 1) * size;
+        java.util.List<Post> posts = postsMapper.selectPageByTopic(topicId.longValue(), status, sort, offset, size);
+        // 批量查询该页所有帖子的附件，优先命中缓存，未命中一次性补齐并回写缓存
+        java.util.List<Long> postIdsBatch = posts.stream().map(Post::getId)
+                .collect(java.util.stream.Collectors.toList());
+        java.util.List<Attachment> allAttachments = attachmentService.getAttachmentsByBusinessBatch("post",
+                postIdsBatch);
+        java.util.Map<Long, java.util.List<Attachment>> attMap = (allAttachments == null)
+                ? new java.util.HashMap<>()
+                : allAttachments.stream()
+                        .filter(a -> a.getBusinessId() != null)
+                        .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
+        java.util.List<PostListItemVO> items = new java.util.ArrayList<>();
+        TopicVO topicVO = topicMapper.getTopicById(topicId);
+        String topicName = topicVO != null ? topicVO.getName() : null;
+        for (Post p : posts) {
+            UserProfile profile = userMapper.getProfile(p.getUserId());
+            String username = profile != null ? profile.getUsername() : null;
+            String avatar = profile != null ? profile.getAvatar() : null;
+            java.util.List<Attachment> attachments = attMap.getOrDefault(p.getId(), java.util.Collections.emptyList());
+            java.util.List<AttachmentLite> liteAttachments = new java.util.ArrayList<>();
+            for (Attachment a : attachments) {
+                liteAttachments.add(AttachmentLite.builder()
+                        .fileUrl(a.getFileUrl())
+                        .fileType(a.getFileType())
+                        .fileName(a.getFileName())
+                        .build());
+            }
+            PostListItemVO vo = PostListItemVO.builder()
+                    .id(p.getId())
+                    .title(p.getTitle())
+                    .content(p.getContent())
+                    .userId(p.getUserId())
+                    .authorUsername(username)
+                    .authorAvatar(avatar)
+                    .topicId(p.getTopicId())
+                    .topicName(topicName)
+                    .likeCount(p.getLikeCount())
+                    .commentCount(p.getCommentCount())
+                    .shareCount(p.getShareCount())
+                    .viewCount(p.getViewCount())
+                    .createdAt(p.getCreatedAt())
+                    .updatedAt(p.getUpdatedAt())
+                    .attachments(liteAttachments)
+                    .build();
+            items.add(vo);
+        }
+        long total = postsMapper.countByTopic(topicId.longValue(), status);
+        PageResult pageResult = new PageResult(total, items);
+
+        if (locked) {
+            try {
+                String json = cn.hutool.json.JSONUtil.toJsonStr(items);
+                stringRedisTemplate.opsForValue().set(listKey, json, TOPIC_LIST_TTL_SECONDS,
+                        java.util.concurrent.TimeUnit.SECONDS);
+                stringRedisTemplate.opsForValue().set(totalKey, String.valueOf(total), TOPIC_TOTAL_TTL_SECONDS,
+                        java.util.concurrent.TimeUnit.SECONDS);
+            } catch (Exception e) {
+                log.error("Restore topic:posts cache failed, key={}", listKey, e);
+            } finally {
+                try {
+                    lock.unlock();
+                } catch (Exception ignore) {
+                }
+            }
+        }
         return Result.success(pageResult);
     }
 

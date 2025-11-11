@@ -21,8 +21,13 @@ public class SearchController {
     public Result search(@RequestParam String keyword,
                          @RequestParam(required = false, defaultValue = "all") String type,
                          @RequestParam(required = false, defaultValue = "1") Integer page,
-                         @RequestParam(required = false, defaultValue = "10") Integer size) {
-        log.info("全文搜索: keyword={}, type={}, page={}, size={}", keyword, type, page, size);
-        return searchService.search(keyword, type, page, size);
+                         @RequestParam(required = false, defaultValue = "10") Integer size,
+                         @RequestParam(required = false, defaultValue = "hot") String sort,
+                         @RequestParam(required = false) Long topicId,
+                         @RequestParam(required = false) Long startTime,
+                         @RequestParam(required = false) Long endTime) {
+        log.info("全文搜索: keyword={}, type={}, page={}, size={}, sort={}, topicId={}, startTime={}, endTime={}",
+                keyword, type, page, size, sort, topicId, startTime, endTime);
+        return searchService.search(keyword, type, page, size, sort, topicId, startTime, endTime);
     }
 }

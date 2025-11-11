@@ -39,7 +39,8 @@ public class SearchServiceImpl implements SearchService {
     private static final String INDEX_POSTS = "posts";
 
     @Override
-    public Result search(String keyword, String type, Integer page, Integer size) {
+    public Result search(String keyword, String type, Integer page, Integer size, String sort,
+                         Long topicId, Long startTime, Long endTime) {
         if (StrUtil.isBlank(keyword)) {
             return Result.error("关键字不能为空");
         }
@@ -114,6 +115,17 @@ public class SearchServiceImpl implements SearchService {
             List<String> synonyms = expandSynonyms(keyword);
             BoolQueryBuilder bool = QueryBuilders.boolQuery();
             bool.filter(QueryBuilders.termQuery("status", "published"));
+            // 话题过滤
+            if (topicId != null && topicId > 0) {
+                bool.filter(QueryBuilders.termQuery("topicId", topicId));
+            }
+            // 时间范围过滤（epoch_millis）
+            if ((startTime != null && startTime > 0) || (endTime != null && endTime > 0)) {
+                var range = QueryBuilders.rangeQuery("createdAt");
+                if (startTime != null && startTime > 0) range.gte(startTime);
+                if (endTime != null && endTime > 0) range.lte(endTime);
+                bool.filter(range);
+            }
             // 主 should：原始关键词
             bool.should(main);
             // 同义词 should：扩大召回
@@ -139,9 +151,24 @@ public class SearchServiceImpl implements SearchService {
 
             source.query(bool);
 
-            // sort by hot (viewCount desc) then createdAt desc
-            source.sort("viewCount", SortOrder.DESC);
-            source.sort("createdAt", SortOrder.DESC);
+            // sort options: hot (default), latest, relevance
+            String s = StrUtil.isBlank(sort) ? "hot" : sort;
+            switch (s) {
+                case "latest":
+                    source.sort("createdAt", SortOrder.DESC);
+                    source.sort("viewCount", SortOrder.DESC);
+                    break;
+                case "relevance":
+                    // rely on _score, optionally add tiebreaker
+                    source.sort("_score", SortOrder.DESC);
+                    source.sort("createdAt", SortOrder.DESC);
+                    break;
+                case "hot":
+                default:
+                    source.sort("viewCount", SortOrder.DESC);
+                    source.sort("createdAt", SortOrder.DESC);
+                    break;
+            }
 
             // pagination
             int from = (page - 1) * size;
@@ -161,24 +188,29 @@ public class SearchServiceImpl implements SearchService {
             request.source(source);
             SearchResponse resp = esClient.search(request, org.elasticsearch.client.RequestOptions.DEFAULT);
 
+            // collect post ids for batch attachment query
             List<PostListItemVO> items = new ArrayList<>();
+            List<Long> postIds = new ArrayList<>();
             for (SearchHit hit : resp.getHits().getHits()) {
-                Map<String, Object> s = hit.getSourceAsMap();
+                Map<String, Object> s1 = hit.getSourceAsMap();
 
-                Long id = getLong(s.get("id"));
-                Long userId = getLong(s.get("userId"));
-                Long topicId = getLong(s.get("topicId"));
-                String title = getString(s.get("title"));
-                String content = getString(s.get("content"));
-                String authorUsername = getString(s.get("authorUsername"));
-                String authorAvatar = getString(s.get("authorAvatar"));
-                String topicName = getString(s.get("topicName"));
-                Integer likeCount = getInt(s.get("likeCount"));
-                Integer commentCount = getInt(s.get("commentCount"));
-                Integer shareCount = getInt(s.get("shareCount"));
-                Integer viewCount = getInt(s.get("viewCount"));
-                LocalDateTime createdAt = getDateTime(s.get("createdAt"));
-                LocalDateTime updatedAt = getDateTime(s.get("updatedAt"));
+                Long id = getLong(s1.get("id"));
+                if (id != null) {
+                    postIds.add(id);
+                }
+                Long userId = getLong(s1.get("userId"));
+                Long hitTopicId = getLong(s1.get("topicId"));
+                String title = getString(s1.get("title"));
+                String content = getString(s1.get("content"));
+                String authorUsername = getString(s1.get("authorUsername"));
+                String authorAvatar = getString(s1.get("authorAvatar"));
+                String topicName = getString(s1.get("topicName"));
+                Integer likeCount = getInt(s1.get("likeCount"));
+                Integer commentCount = getInt(s1.get("commentCount"));
+                Integer shareCount = getInt(s1.get("shareCount"));
+                Integer viewCount = getInt(s1.get("viewCount"));
+                LocalDateTime createdAt = getDateTime(s1.get("createdAt"));
+                LocalDateTime updatedAt = getDateTime(s1.get("updatedAt"));
 
                 // apply highlights
                 if (hit.getHighlightFields().get("title") != null) {
@@ -195,18 +227,8 @@ public class SearchServiceImpl implements SearchService {
                     topicName = String.join("", toStrings(hit.getHighlightFields().get("topicName").fragments()));
                 }
 
-                // attachments (轻量)
+                // attachments will be filled after batch query
                 List<AttachmentLite> liteAttachments = new ArrayList<>();
-                if (id != null) {
-                    List<Attachment> attachments = attachmentMapper.selectByBusiness("post", id);
-                    for (Attachment a : attachments) {
-                        liteAttachments.add(AttachmentLite.builder()
-                                .fileUrl(a.getFileUrl())
-                                .fileType(a.getFileType())
-                                .fileName(a.getFileName())
-                                .build());
-                    }
-                }
 
                 PostListItemVO vo = PostListItemVO.builder()
                         .id(id)
@@ -215,7 +237,7 @@ public class SearchServiceImpl implements SearchService {
                         .userId(userId)
                         .authorUsername(authorUsername)
                         .authorAvatar(authorAvatar)
-                        .topicId(topicId)
+                        .topicId(hitTopicId)
                         .topicName(topicName)
                         .likeCount(likeCount)
                         .commentCount(commentCount)
@@ -226,6 +248,28 @@ public class SearchServiceImpl implements SearchService {
                         .attachments(liteAttachments)
                         .build();
                 items.add(vo);
+            }
+
+            // batch query attachments by post ids and fill into items
+            if (!postIds.isEmpty()) {
+                List<Attachment> all = attachmentMapper.selectByBusinessIds("post", postIds);
+                java.util.Map<Long, List<Attachment>> grouped = all.stream()
+                        .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
+                for (PostListItemVO vo : items) {
+                    Long pid = vo.getId();
+                    List<Attachment> attachments = grouped.get(pid);
+                    if (attachments != null && !attachments.isEmpty()) {
+                        List<AttachmentLite> lite = new ArrayList<>();
+                        for (Attachment a : attachments) {
+                            lite.add(AttachmentLite.builder()
+                                    .fileUrl(a.getFileUrl())
+                                    .fileType(a.getFileType())
+                                    .fileName(a.getFileName())
+                                    .build());
+                        }
+                        vo.setAttachments(lite);
+                    }
+                }
             }
 
             SearchPageResult result = SearchPageResult.builder()

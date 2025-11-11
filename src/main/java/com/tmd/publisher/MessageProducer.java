@@ -2,6 +2,7 @@ package com.tmd.publisher;
 
 import com.tmd.config.RabbitMQConfig;
 import com.tmd.entity.dto.UserContent;
+import com.tmd.publisher.TopicModerationMessage;
 import lombok.RequiredArgsConstructor;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -107,6 +108,23 @@ public class MessageProducer {
         rabbitTemplate.convertAndSend(
                 RabbitMQConfig.DIRECT_EXCHANGE,
                 RabbitMQConfig.DIRECT_ROUTING_KEY_2,
+                message,
+                new CorrelationData(message.getId()));
+    }
+
+    /**
+     * 发送话题审核消息（异步）
+     */
+    public void sendTopicModeration(TopicModerationMessage payload) {
+        MessageDTO message = new MessageDTO();
+        message.setId(payload.getTopicId() != null ? payload.getTopicId().toString() : UUID.randomUUID().toString());
+        message.setContent(payload);
+        message.setSendTime(LocalDateTime.now());
+        message.setType("topic_moderation");
+
+        rabbitTemplate.convertAndSend(
+                RabbitMQConfig.DIRECT_EXCHANGE,
+                RabbitMQConfig.DIRECT_ROUTING_KEY_1,
                 message,
                 new CorrelationData(message.getId()));
     }
