@@ -20,8 +20,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.elasticsearch.action.index.IndexRequest;
+import org.elasticsearch.action.delete.DeleteRequest;
 import org.elasticsearch.client.RequestOptions;
 import org.elasticsearch.client.RestHighLevelClient;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.ScanOptions;
 
 import java.io.IOException;
 import java.time.ZoneId;
@@ -737,5 +741,124 @@ public class PostsServiceImpl implements PostsService {
                 .scroll(offset + items.size())
                 .build();
         return Result.success(scrollResult);
+    }
+
+    @Override
+    public Result deletePost(Long userId, Long postId) {
+        // 1) 参数校验
+        if (userId == null || userId <= 0 || postId == null || postId <= 0) {
+            return Result.error("验证失败,非法访问");
+        }
+
+        // 2) 查询帖子并校验权限（作者可删；如需管理员可在此扩展）
+        Post post = postsMapper.selectById(postId);
+        if (post == null) {
+            return Result.error("帖子不存在或已删除");
+        }
+        if (post.getUserId() == null || !post.getUserId().equals(userId)) {
+            return Result.error("无权限删除该帖子");
+        }
+
+        // 3) 同步：MySQL 硬删除
+        try {
+            postsMapper.deleteById(postId);
+        } catch (Exception e) {
+            log.error("删除帖子失败: id={}", postId, e);
+            return Result.error("删除失败");
+        }
+
+        // 4) 异步：附件删除、缓存清理、ES 删除
+        threadPoolConfig.threadPoolExecutor().execute(() -> {
+            try {
+                // 4.1 附件删除（数据库与OSS；内部含缓存处理）
+                try {
+                    attachmentService.deleteAttachmentsByBusiness("post", postId);
+                } catch (Exception e) {
+                    log.warn("删除帖子附件失败: postId={}", postId, e);
+                }
+
+                String typeKey = StrUtil.isBlank(post.getPostType()) ? "-" : post.getPostType();
+                String statusKey = (post.getStatus() == null) ? "-" : post.getStatus().name();
+
+                // 4.3 列表缓存：按模式清理所有分页缓存（使用 SCAN，避免阻塞）
+                try {
+                    deleteKeysByPattern(String.format("post:list:%s:%s:*", typeKey, statusKey));
+                } catch (Exception e) {
+                    log.warn("删除帖子后清理列表缓存失败: id={}", postId, e);
+                }
+
+                // 4.4 计数缓存：删除总数键（回源重建更稳妥）
+                try {
+                    String totalLatestKey = String.format(POSTS_TOTAL_KEY_FMT, typeKey, statusKey, "latest");
+                    String totalHotKey = String.format(POSTS_TOTAL_KEY_FMT, typeKey, statusKey, "hot");
+                    stringRedisTemplate.delete(totalLatestKey);
+                    stringRedisTemplate.delete(totalHotKey);
+                } catch (Exception e) {
+                    log.warn("删除帖子后删除计数缓存失败: id={}", postId, e);
+                }
+
+                // 4.5 话题维度：清理该话题的列表与计数缓存
+                try {
+                    if (post.getTopicId() != null) {
+                        Long topicId = post.getTopicId();
+                        deleteKeysByPattern(String.format("topic:post:list:%d:%s:*", topicId, statusKey));
+                        String topicTotalLatestKey = String.format("topic:post:total:%d:%s:%s", topicId, statusKey,
+                                "latest");
+                        String topicTotalHotKey = String.format("topic:post:total:%d:%s:%s", topicId, statusKey, "hot");
+                        stringRedisTemplate.delete(topicTotalLatestKey);
+                        stringRedisTemplate.delete(topicTotalHotKey);
+                    }
+                } catch (Exception e) {
+                    log.warn("删除帖子后话题维度缓存处理失败: id={}", postId, e);
+                }
+
+                // 4.6 ES 索引删除（容错，不影响主流程）
+                try {
+                    DeleteRequest req = new DeleteRequest(INDEX_POSTS, String.valueOf(postId));
+                    esClient.delete(req, RequestOptions.DEFAULT);
+                } catch (Exception e) {
+                    log.warn("删除ES索引文档失败: id={}", postId, e);
+                }
+            } catch (Exception e) {
+                log.error("删除帖子后异步同步出错: id={}", postId, e);
+            }
+        });
+
+        // 5) 立即返回成功
+        return Result.success("删除成功");
+    }
+
+    // 使用 SCAN 按模式删除键，避免 KEYS 阻塞；异常时回退 KEYS（规模小时可接受）
+    private void deleteKeysByPattern(String pattern) {
+        try {
+            stringRedisTemplate.execute((RedisCallback<Void>) connection -> {
+                ScanOptions options = ScanOptions.scanOptions().match(pattern).count(1000).build();
+                try (Cursor<byte[]> cursor = connection.scan(options)) {
+                    java.util.List<byte[]> batch = new java.util.ArrayList<>();
+                    while (cursor.hasNext()) {
+                        batch.add(cursor.next());
+                        if (batch.size() >= 1000) {
+                            connection.del(batch.toArray(new byte[0][]));
+                            batch.clear();
+                        }
+                    }
+                    if (!batch.isEmpty()) {
+                        connection.del(batch.toArray(new byte[0][]));
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+                return null;
+            });
+        } catch (Exception e) {
+            try {
+                java.util.Set<String> keys = stringRedisTemplate.keys(pattern);
+                if (keys != null && !keys.isEmpty()) {
+                    stringRedisTemplate.delete(keys);
+                }
+            } catch (Exception e2) {
+                log.warn("按模式删除缓存失败: pattern={}", pattern, e2);
+            }
+        }
     }
 }

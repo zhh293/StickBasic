@@ -9,9 +9,13 @@ import java.util.List;
 @Mapper
 public interface PostsMapper {
     int insert(Post post);
+
+
     Post selectById(@Param("id") Long id);
     int deleteById(@Param("id") Long id);
 
+
+    
     List<Post> selectPage(@Param("type") String type,
                           @Param("status") String status,
                           @Param("sort") String sort,
