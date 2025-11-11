@@ -20,13 +20,13 @@
         <result property="updatedAt" column="updated_at"/>
     </resultMap>
 
-    <!-- 批量插入附件 -->
+    <!-- 批量插入附件（支持手动指定ID） -->
     <insert id="batchInsert" parameterType="java.util.List">
-        INSERT INTO attachment (file_id, file_url, file_name, file_size, file_type, mime_type,
+        INSERT INTO attachment (id, file_id, file_url, file_name, file_size, file_type, mime_type,
                                  business_type, business_id, uploader_id, upload_time, created_at, updated_at)
         VALUES
         <foreach collection="list" item="item" separator=",">
-            (#{item.fileId}, #{item.fileUrl}, #{item.fileName}, #{item.fileSize}, #{item.fileType}, #{item.mimeType},
+            (#{item.id}, #{item.fileId}, #{item.fileUrl}, #{item.fileName}, #{item.fileSize}, #{item.fileType}, #{item.mimeType},
              #{item.businessType}, #{item.businessId}, #{item.uploaderId}, #{item.uploadTime}, #{item.createdAt}, #{item.updatedAt})
         </foreach>
     </insert>

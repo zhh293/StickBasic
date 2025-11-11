@@ -134,4 +134,5 @@ public class UserServiceimpl implements UserService, UserDetailsService {
         LoginUser loginUser = new LoginUser(user);
         return loginUser;
     }
+
 }
