@@ -1,8 +1,10 @@
 package com.tmd.service;
 
+import com.tmd.entity.dto.Result;
 
-import org.springframework.stereotype.Service;
-
-@Service
 public interface SearchService {
+    Result search(String keyword,
+                  String type,
+                  Integer page,
+                  Integer size);
 }
