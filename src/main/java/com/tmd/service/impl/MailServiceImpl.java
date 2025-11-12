@@ -118,15 +118,21 @@ public class MailServiceImpl implements MailService {
                 if (b) {
                     threadPoolConfig.threadPoolExecutor().execute(() -> {
                         // 查询数据库，查询所有邮件的id
-                        List<Long> ids = mailMapper.selectAllIds();
-                        // 查询数据库的时候肯定不能阻塞查询，让一个线程去查询数据库，其他的先返回空，等数据库查询完成后再返回
-                        Set<ZSetOperations.TypedTuple<String>> addTuples = new HashSet<>(ids.size());
-                        for (Long id : ids) {
-                            addTuples.add(
-                                    ZSetOperations.TypedTuple.of(id.toString(), (double) System.currentTimeMillis()));
-                        }
-                        if (!addTuples.isEmpty()) {
-                            stringRedisTemplate.opsForZSet().add(key, addTuples);
+                        try {
+                            List<Long> ids = mailMapper.selectAllIds();
+                            // 查询数据库的时候肯定不能阻塞查询，让一个线程去查询数据库，其他的先返回空，等数据库查询完成后再返回
+                            Set<ZSetOperations.TypedTuple<String>> addTuples = new HashSet<>(ids.size());
+                            for (Long id : ids) {
+                                addTuples.add(
+                                        ZSetOperations.TypedTuple.of(id.toString(), (double) System.currentTimeMillis()));
+                            }
+                            if (!addTuples.isEmpty()) {
+                                stringRedisTemplate.opsForZSet().add(key, addTuples);
+                            }
+                        }finally {
+                            if (lock.isHeldByCurrentThread()) {
+                                lock.unlock();
+                            }
                         }
                     });
                 }
@@ -134,11 +140,11 @@ public class MailServiceImpl implements MailService {
                         .data(new ArrayList<>()).build();
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
-            } finally {
+            } /*finally {
                 if (lock.isHeldByCurrentThread()) {
                     lock.unlock();
                 }
-            }
+            }*/
         }
 
         List<Long> ids = new ArrayList<>(tuples.size());
