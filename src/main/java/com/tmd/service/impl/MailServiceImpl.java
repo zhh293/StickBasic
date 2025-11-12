@@ -220,7 +220,7 @@ public class MailServiceImpl implements MailService {
                 .build();
         mailMapper.insert(mail);
         stringRedisTemplate.opsForZSet().add("mails:all", mail.getId().toString(),
-                mail.getCreatedAt().toInstant(ZoneOffset.of("+8")).toEpochMilli());
+                System.currentTimeMillis());
         stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail), 5, TimeUnit.MINUTES);
     }
 
@@ -377,9 +377,9 @@ public class MailServiceImpl implements MailService {
                     .collect(Collectors.toList());
             // 恢复缓存，缓存的key为mail:push:userId
             threadPoolConfig.threadPoolExecutor().execute(() -> {
-                for (int i = 0; i < page1.getTotal(); i++) {
+                for (ReceivedMail rm : page1.getResult()) {
                     stringRedisTemplate.opsForZSet().add("mail:push:" + BaseContext.get(),
-                            JSONUtil.toJsonStr(page1.getResult().get(i)),
+                            JSONUtil.toJsonStr(rm),
                             System.currentTimeMillis());
                 }
                 log.info("[邮件服务] 恢复缓存成功");
