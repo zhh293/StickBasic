@@ -131,9 +131,7 @@ public class MailServiceImpl implements MailService {
                                 stringRedisTemplate.opsForZSet().add(key, addTuples);
                             }
                         } finally {
-                            if (lock.isHeldByCurrentThread()) {
-                                lock.unlock();
-                            }
+                            lock.unlock();
                         }
                     });
                 }
@@ -376,9 +374,10 @@ public class MailServiceImpl implements MailService {
                             .build())
                     .collect(Collectors.toList());
             // 恢复缓存，缓存的key为mail:push:userId
+            Long currentId = BaseContext.get();
             threadPoolConfig.threadPoolExecutor().execute(() -> {
                 for (ReceivedMail rm : page1.getResult()) {
-                    stringRedisTemplate.opsForZSet().add("mail:push:" + BaseContext.get(),
+                    stringRedisTemplate.opsForZSet().add("mail:push:" + currentId,
                             JSONUtil.toJsonStr(rm),
                             System.currentTimeMillis());
                 }
