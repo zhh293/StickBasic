@@ -10,6 +10,8 @@ import com.tmd.mapper.MailCommentMapper;
 import com.tmd.mapper.MailMapper;
 import com.tmd.mapper.ReceivedMailMapper;
 import com.tmd.publisher.MessageProducer;
+import org.springframework.data.redis.core.ZSetOperations;
+import java.util.HashSet;
 import com.tmd.service.MailService;
 import com.tmd.tools.BaseContext;
 import com.tmd.tools.RedisIdWorker;
@@ -52,6 +54,7 @@ public class MailServiceImpl implements MailService {
     private ReceivedMailMapper receivedMailMapper;
     @Autowired
     private RedisIdWorker redisIdWorker;
+
     @Override
     public MailVO getMailById(Integer mailId) {
         // 先查redis，缓存中有则直接返回
@@ -80,11 +83,11 @@ public class MailServiceImpl implements MailService {
         mail mail = mailMapper.selectById(mailId);
         // 数据库中没查到则返回null，而且使用缓存穿透
         if (mail == null) {
-            stringRedisTemplate.opsForValue().set("mail:" + mailId, "");
+            stringRedisTemplate.opsForValue().set("mail:" + mailId, "", 5, TimeUnit.MINUTES);
             return null;
         }
         // 存入redis
-        stringRedisTemplate.opsForValue().set("mail:" + mailId, JSONUtil.toJsonStr(mail));
+        stringRedisTemplate.opsForValue().set("mail:" + mailId, JSONUtil.toJsonStr(mail), 5, TimeUnit.MINUTES);
         MailVO mailVO = MailVO.builder()
                 .mailId(mail.getId())
                 .stampType(mail.getStampType())
@@ -103,39 +106,49 @@ public class MailServiceImpl implements MailService {
     public ScrollResult getAllMails(MailPackage mailPackage) {
         // 进行滚动分页查询
         String key = "mails:all";
-        Set<String> set = stringRedisTemplate.opsForZSet().reverseRangeByScore(key, 0, mailPackage.getMax(),
-                mailPackage.getScroll(), mailPackage.getSize());
-        if (Objects.isNull(set) || set.isEmpty()) {
+        Set<ZSetOperations.TypedTuple<String>> tuples = stringRedisTemplate.opsForZSet()
+                .reverseRangeByScoreWithScores(key, 0, mailPackage.getMax(),
+                        mailPackage.getScroll(), mailPackage.getSize());
+        if (Objects.isNull(tuples) || tuples.isEmpty()) {
             // 决定进行数据库查询
             // 查询数据库的时候肯定不能阻塞查询，让一个线程去查询数据库，其他的先返回空，等数据库查询完成后再返回
             RLock lock = redissonClient.getLock("lock:mails:all");
             try {
-                boolean b = lock.tryLock(10, -1, TimeUnit.SECONDS);
+                boolean b = lock.tryLock(5, 30, TimeUnit.SECONDS);
                 if (b) {
                     threadPoolConfig.threadPoolExecutor().execute(() -> {
                         // 查询数据库，查询所有邮件的id
                         List<Long> ids = mailMapper.selectAllIds();
                         // 查询数据库的时候肯定不能阻塞查询，让一个线程去查询数据库，其他的先返回空，等数据库查询完成后再返回
-                        ids.stream().forEach(id -> {
-                            stringRedisTemplate.opsForZSet().add(key, id.toString(), System.currentTimeMillis());
-                        });
+                        Set<ZSetOperations.TypedTuple<String>> addTuples = new HashSet<>(ids.size());
+                        for (Long id : ids) {
+                            addTuples.add(
+                                    ZSetOperations.TypedTuple.of(id.toString(), (double) System.currentTimeMillis()));
+                        }
+                        if (!addTuples.isEmpty()) {
+                            stringRedisTemplate.opsForZSet().add(key, addTuples);
+                        }
                     });
                 }
-                return null;
+                return ScrollResult.builder().max(mailPackage.getMax()).scroll(mailPackage.getScroll())
+                        .data(new ArrayList<>()).build();
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             } finally {
-                lock.unlock();
+                if (lock.isHeldByCurrentThread()) {
+                    lock.unlock();
+                }
             }
         }
 
-        List<Long> ids = new ArrayList<>(set.size());
+        List<Long> ids = new ArrayList<>(tuples.size());
         long minTime = mailPackage.getMax();
         int os = mailPackage.getScroll();
-        for (String s : set) {
+        for (ZSetOperations.TypedTuple<String> t : tuples) {
+            String s = t.getValue();
             ids.add(Long.parseLong(s));
-            Double score = stringRedisTemplate.opsForZSet().score(key, s);
-            long time = score.longValue();
+            Double score = t.getScore();
+            long time = score == null ? minTime : score.longValue();
             if (time == minTime) {
                 os++;
             } else {
@@ -199,59 +212,72 @@ public class MailServiceImpl implements MailService {
         mailMapper.insert(mail);
         stringRedisTemplate.opsForZSet().add("mails:all", mail.getId().toString(),
                 mail.getCreatedAt().toInstant(ZoneOffset.of("+8")).toEpochMilli());
-        stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail));
+        stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail), 5, TimeUnit.MINUTES);
     }
 
     @Override
-    public Result comment(Long mailId, MailDTO mailDTO,Boolean isFirst) {
-        //首先肯定要操作数据库的，最好使用redis缓存
-        //所以我的思路如下
-        //先把maildto整理为mail，然后将mail推送到别人的邮箱当中，mail:push:userId，这个操作通过redis可以轻松实现
-        //通过redis获取mailId对应的邮件
-        if(isFirst){
-        String s = stringRedisTemplate.opsForValue().get("mail:" + mailId);
-        mail mail = JSONUtil.toBean(s, mail.class);
-        Long senderId = mail.getSenderId();
-        MailComment mailComment = MailComment.builder()
-                .mailId(Long.valueOf(mailId))
-                .commenterId(BaseContext.get())
-                .content(mailDTO.getContent())
-                .createAt(LocalDateTime.now())
-                .build();
+    public Result comment(Long mailId, MailDTO mailDTO, Boolean isFirst) {
+        // 首先肯定要操作数据库的，最好使用redis缓存
+        // 所以我的思路如下
+        // 先把maildto整理为mail，然后将mail推送到别人的邮箱当中，mail:push:userId，这个操作通过redis可以轻松实现
+        // 通过redis获取mailId对应的邮件
+        if (isFirst) {
+            String s = stringRedisTemplate.opsForValue().get("mail:" + mailId);
+            mail mail;
+            if (StrUtil.isBlank(s)) {
+                // 查询数据库
+                mail = mailMapper.selectById(mailId.intValue());
+                if (mail == null) {
+                    return Result.error("原始邮件不存在或已删除");
+                }
+                // 将数据库中的邮件缓存到redis中
+                stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail), 5,
+                        TimeUnit.MINUTES);
+            } else {
+                mail = JSONUtil.toBean(s, mail.class);
+            }
+            Long senderId = mail.getSenderId();
+            MailComment mailComment = MailComment.builder()
+                    .mailId(Long.valueOf(mailId))
+                    .commenterId(BaseContext.get())
+                    .content(mailDTO.getContent())
+                    .createAt(LocalDateTime.now())
+                    .build();
             long l = redisIdWorker.nextId("mailreceive");
             ReceivedMail receivedMail = ReceivedMail.builder()
                     .id(l)
-                .createAt(LocalDateTime.now())
-                .originalMailId(Long.valueOf(mailId))
-                .recipientId(senderId)
-                .senderId(BaseContext.get())
-                .senderNickname(mailDTO.getSenderNickname())
-                .content(mailDTO.getContent())
-                .status(mailStatus.sent)
-                .stampType(mailDTO.getStampType())
-                .readAt(null)
-                .build();
-        stringRedisTemplate.opsForZSet().add("mail:push:" + senderId, JSONUtil.toJsonStr(receivedMail),
-                System.currentTimeMillis());
-        //然后把mail也推送到key为mail:comment:userId的list中，这样之后自己就可以查询到自己评论的邮件了
-        stringRedisTemplate.opsForList().leftPush("mail:comment:" +BaseContext.get(), JSONUtil.toJsonStr(mailComment));
-        //然后这些数据当然要插入到数据库当中了，插入到三个数据库中，异步写入
-        threadPoolConfig.threadPoolExecutor().execute(()->{
+                    .createAt(LocalDateTime.now())
+                    .originalMailId(Long.valueOf(mailId))
+                    .recipientId(senderId)
+                    .senderId(BaseContext.get())
+                    .senderNickname(mailDTO.getSenderNickname())
+                    .content(mailDTO.getContent())
+                    .status(mailStatus.sent)
+                    .stampType(mailDTO.getStampType())
+                    .readAt(null)
+                    .build();
+            stringRedisTemplate.opsForZSet().add("mail:push:" + senderId, JSONUtil.toJsonStr(receivedMail),
+                    System.currentTimeMillis());
+            // 然后把mail也推送到key为mail:comment:userId的list中，这样之后自己就可以查询到自己评论的邮件了
+            stringRedisTemplate.opsForList().leftPush("mail:comment:" + BaseContext.get(),
+                    JSONUtil.toJsonStr(mailComment));
+            // 然后这些数据当然要插入到数据库当中了，插入到三个数据库中，异步写入
+            threadPoolConfig.threadPoolExecutor().execute(() -> {
 
-            mailCommentMapper.insert(mailComment);
+                mailCommentMapper.insert(mailComment);
 
-            receivedMailMapper.insert(receivedMail);
+                receivedMailMapper.insert(receivedMail);
 
-            log.info("[邮件服务] 评论成功");
-        });
-        return Result.success(MailCommentVO .builder()
-                .isFirst(false)
-                .build());
-        }else{
-            //如果不是第一次的话，说明是互相来信，那么这次的邮件id就是自己信箱中收到的邮件的id，也就是说是receivemailId，上一次来信的id
-            //要通过receivemailId找到回信的人的信息
+                log.info("[邮件服务] 评论成功");
+            });
+            return Result.success(MailCommentVO.builder()
+                    .isFirst(false)
+                    .build());
+        } else {
+            // 如果不是第一次的话，说明是互相来信，那么这次的邮件id就是自己信箱中收到的邮件的id，也就是说是receivemailId，上一次来信的id
+            // 要通过receivemailId找到回信的人的信息
             ReceivedMail receivedMail = receivedMailMapper.selectByMailId(mailId);
-            ReceivedMail readyToAdd=ReceivedMail.builder()
+            ReceivedMail readyToAdd = ReceivedMail.builder()
                     .id(redisIdWorker.nextId("mailreceive"))
                     .createAt(LocalDateTime.now())
                     .originalMailId(receivedMail.getOriginalMailId())
@@ -263,21 +289,23 @@ public class MailServiceImpl implements MailService {
                     .senderId(BaseContext.get())
                     .readAt(null)
                     .build();
-            stringRedisTemplate.opsForZSet().add("mail:push:" + receivedMail.getSenderId(), JSONUtil.toJsonStr(readyToAdd),
+            stringRedisTemplate.opsForZSet().add("mail:push:" + receivedMail.getSenderId(),
+                    JSONUtil.toJsonStr(readyToAdd),
                     System.currentTimeMillis());
-            MailComment mailComment=MailComment.builder()
+            MailComment mailComment = MailComment.builder()
                     .mailId(receivedMail.getOriginalMailId())
                     .commenterId(BaseContext.get())
                     .content(mailDTO.getContent())
                     .createAt(LocalDateTime.now())
                     .build();
-            stringRedisTemplate.opsForList().leftPush("mail:comment:" +BaseContext.get(), JSONUtil.toJsonStr(mailComment));
-            threadPoolConfig.threadPoolExecutor().execute(()->{
+            stringRedisTemplate.opsForList().leftPush("mail:comment:" + BaseContext.get(),
+                    JSONUtil.toJsonStr(mailComment));
+            threadPoolConfig.threadPoolExecutor().execute(() -> {
                 mailCommentMapper.insert(mailComment);
                 receivedMailMapper.insert(readyToAdd);
                 log.info("[邮件服务] 评论成功");
             });
-            return Result.success(MailCommentVO .builder()
+            return Result.success(MailCommentVO.builder()
                     .isFirst(false)
                     .build());
         }
@@ -285,8 +313,9 @@ public class MailServiceImpl implements MailService {
 
     @Override
     public PageResult getReceivedMails(Integer page, Integer size, String status) {
-        //先查redis，redis没有再查数据库
-        Set<String> set = stringRedisTemplate.opsForZSet().rangeByScore("mail:push:" + BaseContext.get(), 0, System.currentTimeMillis(), (long) (page - 1) * size, size);
+        // 先查redis，redis没有再查数据库
+        Set<String> set = stringRedisTemplate.opsForZSet().rangeByScore("mail:push:" + BaseContext.get(), 0,
+                System.currentTimeMillis(), (long) (page - 1) * size, size);
         List<ReceivedMailVO> receivedMails = new ArrayList<>();
         if (set != null) {
             for (String s : set) {
@@ -298,7 +327,7 @@ public class MailServiceImpl implements MailService {
                         .reviewContent(receivedMail.getContent())
                         .createdAt(receivedMail.getCreateAt())
                         .build();
-                //获取原来的邮件的内容
+                // 获取原来的邮件的内容
                 String s1 = stringRedisTemplate.opsForValue().get("mail:" + receivedMail.getOriginalMailId());
                 mail mail = JSONUtil.toBean(s1, mail.class);
                 receivedMailVO.setContent(mail.getContent());
@@ -308,28 +337,31 @@ public class MailServiceImpl implements MailService {
                     .total(stringRedisTemplate.opsForZSet().size("mail:push:" + BaseContext.get()))
                     .rows(receivedMails)
                     .build();
-        }else{
-              PageHelper.startPage(page, size);
-              Page<ReceivedMail> page1 = receivedMailMapper.selectByUserId(BaseContext.get());
-              List<ReceivedMailVO> collect = page1.getResult().stream()
+        } else {
+            PageHelper.startPage(page, size);
+            Page<ReceivedMail> page1 = receivedMailMapper.selectByUserId(BaseContext.get());
+            List<ReceivedMailVO> collect = page1.getResult().stream()
                     .map(receivedMail -> ReceivedMailVO.builder()
                             .receivedMailId(receivedMail.getId())
                             .senderNickname(receivedMail.getSenderNickname())
                             .stampType(receivedMail.getStampType())
                             .reviewContent(receivedMail.getContent())
                             .createdAt(receivedMail.getCreateAt())
-                            .content(JSONUtil.toBean(stringRedisTemplate.opsForValue().get("mail:" + receivedMail.getOriginalMailId()), mail.class).getContent())
-                            .build()
-                    ).collect(Collectors.toList());
-              //恢复缓存，缓存的key为mail:push:userId
+                            .content(JSONUtil.toBean(
+                                    stringRedisTemplate.opsForValue().get("mail:" + receivedMail.getOriginalMailId()),
+                                    mail.class).getContent())
+                            .build())
+                    .collect(Collectors.toList());
+            // 恢复缓存，缓存的key为mail:push:userId
             threadPoolConfig.threadPoolExecutor().execute(() -> {
-                for(int i=0;i<page1.getTotal();i++){
-                    stringRedisTemplate.opsForZSet().add("mail:push:" + BaseContext.get(), JSONUtil.toJsonStr(page1.getResult().get(i)),
+                for (int i = 0; i < page1.getTotal(); i++) {
+                    stringRedisTemplate.opsForZSet().add("mail:push:" + BaseContext.get(),
+                            JSONUtil.toJsonStr(page1.getResult().get(i)),
                             System.currentTimeMillis());
                 }
                 log.info("[邮件服务] 恢复缓存成功");
             });
-              return PageResult.builder()
+            return PageResult.builder()
                     .total(page1.getTotal())
                     .rows(collect)
                     .build();
