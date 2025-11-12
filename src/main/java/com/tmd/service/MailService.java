@@ -17,4 +17,6 @@ public interface MailService {
     Result comment(Long mailId, MailDTO mailDTO,Boolean isFirst);
 
     PageResult getReceivedMails(Integer page, Integer size, String status);
+
+    PageResult getSelfCommentMails(Integer page, Integer size);
 }

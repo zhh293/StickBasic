@@ -389,4 +389,90 @@ public class MailServiceImpl implements MailService {
                     .build();
         }
     }
+
+    @Override
+    public PageResult getSelfCommentMails(Integer page, Integer size) {
+        int p = page == null || page < 1 ? 1 : page;
+        int s = size == null ? 10 : Math.min(Math.max(size, 1), 50);
+        Long uid = BaseContext.get();
+        String key = "mail:comment:" + uid;
+        Long total = stringRedisTemplate.opsForList().size(key);
+        long start = (long) (p - 1) * s;
+        long end = start + s - 1;
+        List<String> raw = stringRedisTemplate.opsForList().range(key, start, end);
+        List<MailCommentItemVO> rows = new ArrayList<>();
+        if (raw != null && !raw.isEmpty()) {
+            for (String r : raw) {
+                MailComment mc = JSONUtil.toBean(r, MailComment.class);
+                MailVO mv = getMailById(mc.getMailId().intValue());
+                MailCommentItemVO vo = MailCommentItemVO.builder()
+                        .mailId(mc.getMailId())
+                        .commentContent(mc.getContent())
+                        .createdAt(mc.getCreateAt())
+                        .originalContent(mv != null ? mv.getContent() : null)
+                        .originalStampType(mv != null ? mv.getStampType() : null)
+                        .originalSenderNickname(mv != null ? mv.getSenderNickname() : null)
+                        .build();
+                rows.add(vo);
+            }
+            return PageResult.builder()
+                    .total(total == null ? 0L : total)
+                    .rows(rows)
+                    .build();
+        }
+
+        int offset = (p - 1) * s;
+        java.util.List<MailComment> dbList = mailCommentMapper.selectByCommenterId(uid, offset, s);
+        long dbTotal = 0L;
+        try {
+            dbTotal = mailCommentMapper.countByCommenterId(uid);
+        } catch (Exception ignore) {
+        }
+        if (dbList != null) {
+            for (MailComment mc : dbList) {
+                MailVO mv = getMailById(mc.getMailId().intValue());
+                MailCommentItemVO vo = MailCommentItemVO.builder()
+                        .mailId(mc.getMailId())
+                        .commentContent(mc.getContent())
+                        .createdAt(mc.getCreateAt())
+                        .originalContent(mv != null ? mv.getContent() : null)
+                        .originalStampType(mv != null ? mv.getStampType() : null)
+                        .originalSenderNickname(mv != null ? mv.getSenderNickname() : null)
+                        .build();
+                rows.add(vo);
+            }
+        }
+
+        RLock lock = redissonClient.getLock("lock:mail:comment:" + uid);
+        boolean locked = false;
+        try {
+            locked = lock.tryLock(5, 30, TimeUnit.SECONDS);
+            if (locked) {
+                List<MailComment> toCache = mailCommentMapper.selectByCommenterId(uid, 0, Math.min(200, s * 2));
+                threadPoolConfig.threadPoolExecutor().execute(() -> {
+                    try {
+                        if (toCache != null && !toCache.isEmpty()) {
+                            stringRedisTemplate.delete(key);
+                            for (MailComment mc : toCache) {
+                                stringRedisTemplate.opsForList().leftPush(key, JSONUtil.toJsonStr(mc));
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("[邮件服务] 恢复评论缓存失败 uid={}", uid, e);
+                    } finally {
+                        if (lock.isHeldByCurrentThread()) {
+                            lock.unlock();
+                        }
+                    }
+                });
+            }
+        } catch (InterruptedException e) {
+            log.warn("[邮件服务] 评论缓存加锁失败 uid={}", uid, e);
+        }
+
+        return PageResult.builder()
+                .total(dbTotal > 0 ? dbTotal : (total == null ? 0L : total))
+                .rows(rows)
+                .build();
+    }
 }

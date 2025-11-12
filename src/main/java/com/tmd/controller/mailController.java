@@ -36,6 +36,7 @@ public class mailController {
     }
 
 
+
     @GetMapping("/self")
     public Result getSelfMails(@RequestParam(defaultValue = "0") Integer page, @RequestParam(defaultValue = "10") Integer size, @RequestParam String status){
         return Result.success(mailService.getSelfMails(page,size,status));
@@ -55,6 +56,13 @@ public class mailController {
     @GetMapping("/received")
     public Result getReceivedMails(@RequestParam(defaultValue = "0") Integer page, @RequestParam(defaultValue = "10") Integer size, @RequestParam String status){
         return Result.success(mailService.getReceivedMails(page,size,status));
+    }
+
+    @GetMapping("/comments/self")
+    public Result getSelfCommentMails(@RequestParam(defaultValue = "1") Integer page, @RequestParam(defaultValue = "10") Integer size){
+        int p = page == null || page < 1 ? 1 : page;
+        int s = size == null ? 10 : Math.min(Math.max(size, 1), 50);
+        return Result.success(mailService.getSelfCommentMails(p, s));
     }
 
 
