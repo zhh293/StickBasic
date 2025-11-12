@@ -124,12 +124,13 @@ public class MailServiceImpl implements MailService {
                             Set<ZSetOperations.TypedTuple<String>> addTuples = new HashSet<>(ids.size());
                             for (Long id : ids) {
                                 addTuples.add(
-                                        ZSetOperations.TypedTuple.of(id.toString(), (double) System.currentTimeMillis()));
+                                        ZSetOperations.TypedTuple.of(id.toString(),
+                                                (double) System.currentTimeMillis()));
                             }
                             if (!addTuples.isEmpty()) {
                                 stringRedisTemplate.opsForZSet().add(key, addTuples);
                             }
-                        }finally {
+                        } finally {
                             if (lock.isHeldByCurrentThread()) {
                                 lock.unlock();
                             }
@@ -140,11 +141,13 @@ public class MailServiceImpl implements MailService {
                         .data(new ArrayList<>()).build();
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
-            } /*finally {
-                if (lock.isHeldByCurrentThread()) {
-                    lock.unlock();
-                }
-            }*/
+            } /*
+               * finally {
+               * if (lock.isHeldByCurrentThread()) {
+               * lock.unlock();
+               * }
+               * }
+               */
         }
 
         List<Long> ids = new ArrayList<>(tuples.size());
@@ -335,7 +338,23 @@ public class MailServiceImpl implements MailService {
                         .build();
                 // 获取原来的邮件的内容
                 String s1 = stringRedisTemplate.opsForValue().get("mail:" + receivedMail.getOriginalMailId());
-                mail mail = JSONUtil.toBean(s1, mail.class);
+                mail mail;
+                if (StrUtil.isBlank(s1)) {
+                    // 查询数据库
+                    mail = mailMapper.selectById(receivedMail.getOriginalMailId().intValue());
+                    if (mail == null) {
+                        return PageResult
+                                .builder()
+                                .total(0L)
+                                .rows(new ArrayList<>())
+                                .build();
+                    }
+                    // 将数据库中的邮件缓存到redis中
+                    stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail), 5,
+                            TimeUnit.MINUTES);
+                } else {
+                    mail = JSONUtil.toBean(s1, mail.class);
+                }
                 receivedMailVO.setContent(mail.getContent());
                 receivedMails.add(receivedMailVO);
             }
@@ -353,9 +372,7 @@ public class MailServiceImpl implements MailService {
                             .stampType(receivedMail.getStampType())
                             .reviewContent(receivedMail.getContent())
                             .createdAt(receivedMail.getCreateAt())
-                            .content(JSONUtil.toBean(
-                                    stringRedisTemplate.opsForValue().get("mail:" + receivedMail.getOriginalMailId()),
-                                    mail.class).getContent())
+                            .content(getMailById(receivedMail.getOriginalMailId().intValue()).getContent())
                             .build())
                     .collect(Collectors.toList());
             // 恢复缓存，缓存的key为mail:push:userId
