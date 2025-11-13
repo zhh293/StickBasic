@@ -27,4 +27,6 @@ public interface TopicService {
                          Integer size,
                          String sort,
                          String status) throws InterruptedException;
+
+    void incrementTopicPostCount(Long topicId, Integer delta);
 }

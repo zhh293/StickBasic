@@ -21,7 +21,8 @@ public class TopicController {
 
     @GetMapping("/{topicId}")
     public Result getTopicById(@PathVariable Integer topicId){
-        return topicService.getTopicById(topicId);
+        // return topicService.getTopicById(topicId);
+        return Result.success(topicService.getTopicCachedById(topicId));
     }
 
     @PostMapping

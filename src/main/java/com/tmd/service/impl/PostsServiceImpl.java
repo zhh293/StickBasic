@@ -260,6 +260,11 @@ public class PostsServiceImpl implements PostsService {
         if (post.getId() == null) {
             return Result.error("帖子创建失败");
         }
+        if (dto.getTopicId() != null && dto.getTopicId() > 0) {
+            try {
+                topicService.incrementTopicPostCount(dto.getTopicId().longValue(), 1);
+            } catch (Exception ignore) {}
+        }
 
         // 同步：附件批量入库并与帖子关联
         try {

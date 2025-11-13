@@ -289,6 +289,27 @@ public class TopicServiceImpl implements TopicService {
     }
 
     @Override
+    public void incrementTopicPostCount(Long topicId, Integer delta) {
+        if (topicId == null || topicId <= 0) return;
+        Integer d = delta == null ? 1 : delta;
+        try {
+            topicMapper.incrPostCount(topicId, d);
+        } catch (Exception ignore) {}
+        try {
+            String cacheKey = "topic:id:" + topicId;
+            String cached = stringRedisTemplate.opsForValue().get(cacheKey);
+            if (cn.hutool.core.util.StrUtil.isNotBlank(cached)) {
+                com.tmd.entity.dto.TopicVO vo = cn.hutool.json.JSONUtil.toBean(cached, com.tmd.entity.dto.TopicVO.class);
+                if (vo != null) {
+                    Integer pc = vo.getPostCount() == null ? 0 : vo.getPostCount();
+                    vo.setPostCount(pc + d);
+                    stringRedisTemplate.opsForValue().set(cacheKey, cn.hutool.json.JSONUtil.toJsonStr(vo), TOPIC_BY_ID_TTL_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+                }
+            }
+        } catch (Exception ignore) {}
+    }
+
+    @Override
     public Result getTopicPosts(Integer topicId,
             Integer page,
             Integer size,

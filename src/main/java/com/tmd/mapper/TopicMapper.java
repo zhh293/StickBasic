@@ -3,6 +3,9 @@ package com.tmd.mapper;
 import com.tmd.entity.dto.Topic;
 import com.tmd.entity.dto.TopicFollowVO;
 import com.tmd.entity.dto.TopicVO;
+
+import io.lettuce.core.dynamic.annotation.Param;
+
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Select;
@@ -26,4 +29,7 @@ public interface TopicMapper {
 
     @Delete("delete from topic where id = #{id}")
     void deleteById(Long id);
+
+    @Update("update topic set post_count = IFNULL(post_count,0) + #{delta} where id = #{id}")
+    void incrPostCount(@Param("id") Long id, @Param("delta") Integer delta);
 }
