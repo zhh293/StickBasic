@@ -2,6 +2,8 @@ package com.tmd.config;
 
 import com.tmd.entity.dto.AliOssUtil;
 import com.tmd.properties.AliOssProperties;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.QuestionAnswerAdvisor;
