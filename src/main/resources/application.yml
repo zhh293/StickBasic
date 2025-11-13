@@ -95,7 +95,17 @@ l2cache:
       expires: {userCache: 300000,goodsCache: 50000}
       # 缓存更新时通知其他节点的topic名称 默认 cache:redis:caffeine:topic
       topic: cache:redis:caffeine:topic
-
+logging:
+  level:
+    com.dlut.blockchain: DEBUG
+    org.springframework.security: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    org.springframework.web.servlet.mvc.method.annotation: DEBUG
+    org.springframework.web.servlet.handler: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
 
 wechat:
   pay:
