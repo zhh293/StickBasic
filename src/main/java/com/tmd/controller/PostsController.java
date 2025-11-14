@@ -1,6 +1,7 @@
 package com.tmd.controller;
 
 
+import com.tmd.entity.dto.PostCreateDTO;
 import com.tmd.entity.dto.Result;
 
 import com.tmd.tools.BaseContext;
