@@ -60,16 +60,21 @@ public class RabbitMQConfig {
 
     @Bean
     public Queue directQueue1() {
-        // 队列配置：持久化、非排他、不自动删除
+        java.util.Map<String, Object> arguments = new java.util.HashMap<>(2);
+        arguments.put("x-dead-letter-exchange", DEAD_LETTER_EXCHANGE);
+        arguments.put("x-dead-letter-routing-key", DEAD_LETTER_ROUTING_KEY);
         return QueueBuilder.durable(DIRECT_QUEUE_1)
-
+                .withArguments(arguments)
                 .build();
     }
 
     @Bean
     public Queue directQueue2() {
+        java.util.Map<String, Object> arguments = new java.util.HashMap<>(2);
+        arguments.put("x-dead-letter-exchange", DEAD_LETTER_EXCHANGE);
+        arguments.put("x-dead-letter-routing-key", DEAD_LETTER_ROUTING_KEY);
         return QueueBuilder.durable(DIRECT_QUEUE_2)
-
+                .withArguments(arguments)
                 .build();
     }
 

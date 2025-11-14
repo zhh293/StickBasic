@@ -3,6 +3,8 @@ package com.tmd.aspect;
 import io.micrometer.core.annotation.Timed;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import org.aspectj.lang.annotation.After;
+import org.aspectj.lang.annotation.AfterReturning;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
@@ -10,6 +12,7 @@ import org.aspectj.lang.annotation.Pointcut;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.amqp.core.Message;
 
 
 @Aspect
@@ -129,6 +132,43 @@ public class PerformanceAspect {
             meterRegistry.counter("service.error.count", "method", operation, "error", e.getClass().getSimpleName()).increment();
             
             throw e;
+        }
+    }
+
+    @AfterReturning(pointcut = "execution(* org.springframework.data.redis.core.ValueOperations.get(..)) && args(key)", returning = "ret")
+    public void redisGetMetric(Object key, Object ret) {
+        if (key instanceof String) {
+            String k = (String) key;
+            if (k.startsWith("post:list:")) {
+                meterRegistry.counter("posts_cache_get_total").increment();
+                if (ret != null) {
+                    meterRegistry.counter("posts_cache_hit_total").increment();
+                } else {
+                    meterRegistry.counter("posts_cache_miss_total").increment();
+                }
+            }
+        }
+    }
+
+    @After("execution(* com.tmd.service.impl.PrivateChatServiceImpl.send(..))")
+    public void chatSendMetric() {
+        meterRegistry.counter("chat_send_total").increment();
+    }
+
+    @After("execution(* com.tmd.service.impl.PrivateChatServiceImpl.ack(..))")
+    public void chatAckMetric() {
+        meterRegistry.counter("chat_ack_total").increment();
+    }
+
+    @After("execution(* com.tmd.consumer.MessageConsumer.consume*(..)) && args(message, channel, amqpMessage)")
+    public void mqConsumeMetric(Object message, Object channel, Message amqpMessage) {
+        String q = amqpMessage.getMessageProperties() == null ? null : amqpMessage.getMessageProperties().getConsumerQueue();
+        if (q != null) {
+            meterRegistry.counter("mq_consume_total", "queue", q).increment();
+            Boolean redelivered = amqpMessage.getMessageProperties().getRedelivered();
+            if (redelivered != null && redelivered) {
+                meterRegistry.counter("mq_redelivered_total", "queue", q).increment();
+            }
         }
     }
 }
