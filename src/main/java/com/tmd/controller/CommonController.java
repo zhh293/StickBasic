@@ -506,12 +506,10 @@ public class CommonController {
             if (attachmentId == null) {
                 return Result.error("附件ID不能为空");
             }
-
             Attachment attachment = attachmentService.getAttachmentById(attachmentId);
             if (attachment == null) {
                 return Result.error("附件不存在: " + attachmentId);
             }
-
             log.info("获取附件信息成功: attachmentId={}", attachmentId);
             return Result.success(attachment);
         } catch (Exception e) {

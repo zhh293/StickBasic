@@ -43,7 +43,8 @@ public class WebSocketServer {
 
     /**
      * 向指定用户发送消息
-     * @param userId 用户ID
+     * 
+     * @param userId  用户ID
      * @param message 消息内容
      */
     public void sendToUser(String userId, String message) {
@@ -60,13 +61,14 @@ public class WebSocketServer {
         }
     }
 
-
     public boolean Open(String userId) {
         Session session = sessions.get(userId);
         return session != null && session.isOpen();
     }
+
     /**
      * 广播消息给所有连接的用户
+     * 
      * @param message 消息内容
      */
     public void broadcast(String message) {
@@ -85,10 +87,10 @@ public class WebSocketServer {
 
     /**
      * 获取当前在线用户数
+     * 
      * @return 在线用户数
      */
     public static int getOnlineCount() {
         return sessions.size();
     }
 }
-

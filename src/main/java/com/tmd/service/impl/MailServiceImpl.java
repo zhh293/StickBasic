@@ -326,6 +326,9 @@ public class MailServiceImpl implements MailService {
         List<ReceivedMailVO> receivedMails = new ArrayList<>();
         if (set != null) {
             for (String s : set) {
+                //这里不需要头像，头像让前端自己存几张，然后当作默认头像来回轮换就行了，毕竟是匿名邮件。。。。。OK，一切为人民服务!!!!!!!
+                //想想怎么导出接口文档，WOC
+
                 ReceivedMail receivedMail = JSONUtil.toBean(s, ReceivedMail.class);
                 ReceivedMailVO receivedMailVO = ReceivedMailVO.builder()
                         .receivedMailId(receivedMail.getId())
