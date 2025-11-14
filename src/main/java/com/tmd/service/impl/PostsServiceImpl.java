@@ -71,6 +71,7 @@ public class PostsServiceImpl implements PostsService {
     private static final long TOTAL_TTL_SECONDS = 300; // 总数缓存TTL
     private static final int ZSET_PREFILL_LIMIT = 2000; // ZSet预热最大条数
     private static final String INDEX_POSTS = "posts";
+    private static final String SHARE_TOKEN_KEY_FMT = "share:token:%s";
 
     @Override
     public Result getPosts(Integer page, Integer size, String type, String status, String sort)
@@ -841,6 +842,85 @@ public class PostsServiceImpl implements PostsService {
 
         // 5) 立即返回成功
         return Result.success("删除成功");
+    }
+
+    @Override
+    public Result createShareLink(Long userId, Long postId, String channel) {
+        try {
+            org.redisson.api.RBloomFilter<Long> postBloom = redissonClient.getBloomFilter("bf:post:id");
+            if (postBloom != null && !postBloom.contains(postId)) {
+                return Result.error("帖子不存在");
+            }
+            String token = java.lang.Long.toString(redisIdWorker.nextId("share"), 36);
+            String key = String.format(SHARE_TOKEN_KEY_FMT, token);
+            java.util.Map<String, String> map = new java.util.HashMap<>();
+            map.put("postId", String.valueOf(postId));
+            map.put("userId", String.valueOf(userId));
+            map.put("channel", channel);
+            map.put("createdAt", String.valueOf(System.currentTimeMillis()));
+            stringRedisTemplate.opsForHash().putAll(key, map);
+            stringRedisTemplate.expire(key, 7, java.util.concurrent.TimeUnit.DAYS);
+
+            threadPoolConfig.threadPoolExecutor().execute(() -> {
+                try { postsMapper.incrShareCount(postId, 1); } catch (Exception ignored) {}
+            });
+
+            java.util.Map<String, String> resp = new java.util.HashMap<>();
+            resp.put("token", token);
+            resp.put("url", "/posts/share/" + token);
+            return Result.success(resp);
+        } catch (Exception e) {
+            return Result.error("生成分享链接失败");
+        }
+    }
+
+    @Override
+    public Result openShareLink(String token) {
+        try {
+            String key = String.format(SHARE_TOKEN_KEY_FMT, token);
+            java.util.Map<Object, Object> map = stringRedisTemplate.opsForHash().entries(key);
+            if (map == null || map.isEmpty()) {
+                return Result.error("链接不存在或已过期");
+            }
+            Long postId = java.lang.Long.valueOf(String.valueOf(map.get("postId")));
+            Post post = postsMapper.selectById(postId);
+            if (post == null) {
+                return Result.error("帖子不存在");
+            }
+            java.util.List<Attachment> attachments = attachmentService.getAttachmentsByBusiness("post", postId);
+            java.util.List<AttachmentLite> liteAttachments = new java.util.ArrayList<>();
+            if (attachments != null) for (Attachment a : attachments) {
+                liteAttachments.add(AttachmentLite.builder().fileUrl(a.getFileUrl()).fileType(a.getFileType()).fileName(a.getFileName()).build());
+            }
+            UserProfile profile = userService.getProfile(post.getUserId());
+            String username = profile != null ? profile.getUsername() : null;
+            String avatar = profile != null ? profile.getAvatar() : null;
+            String topicName = null;
+            if (post.getTopicId() != null) {
+                TopicVO topicVO = topicService.getTopicCachedById(post.getTopicId().intValue());
+                topicName = topicVO != null ? topicVO.getName() : null;
+            }
+            PostListItemVO vo = PostListItemVO.builder()
+                    .id(post.getId())
+                    .title(post.getTitle())
+                    .content(post.getContent())
+                    .userId(post.getUserId())
+                    .authorUsername(username)
+                    .authorAvatar(avatar)
+                    .topicId(post.getTopicId())
+                    .topicName(topicName)
+                    .likeCount(post.getLikeCount())
+                    .commentCount(post.getCommentCount())
+                    .shareCount(post.getShareCount())
+                    .viewCount(post.getViewCount())
+                    .createdAt(post.getCreatedAt())
+                    .updatedAt(post.getUpdatedAt())
+                    .attachments(liteAttachments)
+                    .build();
+            return Result.success(vo);
+        } catch (Exception e) {
+            return Result.error("解析分享链接失败");
+        }
     }
 
     // 使用 SCAN 按模式删除键，避免 KEYS 阻塞；异常时回退 KEYS（规模小时可接受）

@@ -176,7 +176,7 @@
         </foreach>
     </select>
 
-    <select id="selectById" resultType="com.tmd.entity.dto.Post">
+  <select id="selectById" resultType="com.tmd.entity.dto.Post">
         SELECT id,
                user_id AS userId,
                topic_id AS topicId,
@@ -195,7 +195,12 @@
                updated_at AS updatedAt
         FROM posts
         WHERE id = #{id}
-    </select>
+  </select>
+
+  <update id="incrShareCount">
+        UPDATE posts SET share_count = IFNULL(share_count,0) + #{delta}
+        WHERE id = #{id}
+  </update>
 
     <delete id="deleteById">
         DELETE FROM posts WHERE id = #{id}

@@ -39,4 +39,6 @@ public interface PostsMapper {
                                @Param("limit") Integer limit);
 
     List<Post> selectByIds(@Param("ids") List<Long> ids);
+
+    int incrShareCount(@Param("id") Long id, @Param("delta") Integer delta);
 }

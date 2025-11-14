@@ -3,6 +3,8 @@ package com.tmd.controller;
 
 import com.tmd.entity.dto.PostCreateDTO;
 import com.tmd.entity.dto.Result;
+import com.tmd.entity.dto.PageResult;
+import com.tmd.entity.dto.PostListItemVO;
 
 import com.tmd.tools.BaseContext;
 import com.tmd.service.PostsService;
@@ -69,5 +71,20 @@ public class PostsController {
         }
         log.info("用户 {} 正在删除帖子 {}", userId, postId);
         return postsService.deletePost(userId, postId);
+    }
+
+    @PostMapping("/{postId}/share")
+    public Result createShare(@PathVariable Long postId,
+                                                             @RequestParam String channel) {
+        Long userId = BaseContext.get();
+        if (userId == null || userId == ERROR_CODE) {
+            return Result.error("验证失败,非法访问");
+        }
+        return postsService.createShareLink(userId, postId, channel);
+    }
+
+    @GetMapping("/share/{token}")
+    public Result openShare(@PathVariable String token) {
+        return postsService.openShareLink(token);
     }
 }

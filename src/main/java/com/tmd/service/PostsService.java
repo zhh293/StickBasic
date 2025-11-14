@@ -19,4 +19,8 @@ public interface PostsService {
                           Integer offset) throws InterruptedException;
 
     Result deletePost(Long userId, Long postId);
+
+    Result createShareLink(Long userId, Long postId, String channel);
+
+    Result openShareLink(String token);
 }
