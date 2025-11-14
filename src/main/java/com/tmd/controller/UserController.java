@@ -57,10 +57,20 @@ public class UserController {
     }
 
     @PostMapping("/login")
-    public Result login(@RequestBody UserData userData) {
+    public Result login(@RequestBody UserData userData,@RequestParam String captchaCode,@RequestParam String captchaId) {
         log.info("用户正在登录:{}", userData.getUsername());
         userData = userService.login(userData);
         if(userData != null){
+            //验证码登录
+            String key="captcha:"+captchaId;
+            String code = stringRedisTemplate.opsForValue().get(key);
+            if(code==null||StrUtil.isBlank(code)){
+                return Result.error("验证码已过期");
+            }
+            if(!code.equalsIgnoreCase(captchaCode)){
+                return Result.error("验证码错误");
+            }
+            stringRedisTemplate.delete(key);
             log.info("用户登录成功:{}", userData.getUsername());
             return Result.success(userData.getToken());
         }
