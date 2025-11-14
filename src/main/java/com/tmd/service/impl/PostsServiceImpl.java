@@ -30,6 +30,7 @@ import org.springframework.data.redis.core.ScanOptions;
 import java.io.IOException;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -221,9 +222,17 @@ public class PostsServiceImpl implements PostsService {
             } finally {
                 redissonClient.getLock(lockKey).unlock();
             }
-            return Result.success("哎呀，一不小心走心了，再试试吧");
+            PageResult pageResult = PageResult.builder()
+                    .rows(Collections.emptyList())
+                    .total(0L)
+                    .build();
+            return Result.success(pageResult);
         } else {
-            return Result.success("哎呀，一不小心走心了，再试试吧");
+            PageResult pageResult = PageResult.builder()
+                    .rows(Collections.emptyList())
+                    .total(0L)
+                    .build();
+            return Result.success(pageResult);
         }
     }
 
@@ -263,7 +272,8 @@ public class PostsServiceImpl implements PostsService {
         if (dto.getTopicId() != null && dto.getTopicId() > 0) {
             try {
                 topicService.incrementTopicPostCount(dto.getTopicId().longValue(), 1);
-            } catch (Exception ignore) {}
+            } catch (Exception ignore) {
+            }
         }
 
         // 同步：附件批量入库并与帖子关联
