@@ -89,12 +89,19 @@ public class TopicServiceImpl implements TopicService {
                 // 从数据库中查出来所有的帖子，然后插入到redis中
                 if (b) {
                     threadPoolConfig.threadPoolExecutor().execute(() -> {
-                        // 把这一堆放到redis的集合当中
                         List<Topic> topics = topicMapper.getAllTopics();
-                        for (Topic topic : topics) {
-                            LocalDateTime createdAt = topic.getCreatedAt();
-                            double score = (double) createdAt.toInstant(java.time.ZoneOffset.of("+8")).toEpochMilli();
-                            stringRedisTemplate.opsForZSet().add(key, JSONUtil.toJsonStr(topic), score);
+                        if (topics == null || topics.isEmpty()) return;
+                        int batchSize = 500;
+                        for (int i = 0; i < topics.size(); i += batchSize) {
+                            int end = Math.min(i + batchSize, topics.size());
+                            java.util.Set<org.springframework.data.redis.core.ZSetOperations.TypedTuple<String>> tuples = new java.util.HashSet<>();
+                            for (int j = i; j < end; j++) {
+                                Topic topic = topics.get(j);
+                                java.time.LocalDateTime createdAt = topic.getCreatedAt();
+                                double score = createdAt == null ? (double) System.currentTimeMillis() : (double) createdAt.toInstant(java.time.ZoneOffset.of("+8")).toEpochMilli();
+                                tuples.add(new org.springframework.data.redis.core.DefaultTypedTuple<>(JSONUtil.toJsonStr(topic), score));
+                            }
+                            stringRedisTemplate.opsForZSet().add(key, tuples);
                         }
                     });
                 }
