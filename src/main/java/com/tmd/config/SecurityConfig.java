@@ -48,6 +48,7 @@ public class SecurityConfig {
                         .requestMatchers("/login", "/public/login/gitee/config",
                                 "/public/login/gitee", "/public/login/ZKP",
                                 "/public/login/button", "/home","/ai1/chat","/register").anonymous()
+                        .requestMatchers("/metrics/perf").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationTokenFilter, UsernamePasswordAuthenticationFilter.class)
