@@ -107,6 +107,13 @@ logging:
     console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
     file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
 
+call:
+  session:
+    ttl-seconds: 180
+    cleanup-interval-ms: 60000
+  connection:
+    cleanup-interval-ms: 30000
+
 wechat:
   pay:
     enabled: true
