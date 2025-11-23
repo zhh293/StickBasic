@@ -22,6 +22,9 @@ import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.data.redis.core.SessionCallback;
+import org.springframework.data.redis.core.RedisOperations;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -54,6 +57,10 @@ public class MailServiceImpl implements MailService {
     private ReceivedMailMapper receivedMailMapper;
     @Autowired
     private RedisIdWorker redisIdWorker;
+    @Autowired
+    private MeterRegistry meterRegistry;
+
+    private static final long MAIL_CACHE_TTL_MINUTES = 5;
 
     @Override
     public MailVO getMailById(Integer mailId) {
@@ -61,6 +68,7 @@ public class MailServiceImpl implements MailService {
         String s = stringRedisTemplate.opsForValue().get("mail:" + mailId);
         // 缓存中没有则查数据库
         if (StrUtil.isNotBlank(s)) {
+            try { meterRegistry.counter("mail.cache.hit").increment(); } catch (Exception ignored) {}
             mail bean = JSONUtil.toBean(s, mail.class);
             MailVO mailVO = MailVO.builder()
                     .mailId(bean.getId())
@@ -77,17 +85,19 @@ public class MailServiceImpl implements MailService {
         // 数据库中查到则返回
         if (s != null) {
             // 说明是缓存穿透，直接返回
+            try { meterRegistry.counter("mail.cache.penetration").increment(); } catch (Exception ignored) {}
             return null;
         }
         // 查数据库
+        try { meterRegistry.counter("mail.cache.miss").increment(); } catch (Exception ignored) {}
         mail mail = mailMapper.selectById(mailId);
         // 数据库中没查到则返回null，而且使用缓存穿透
         if (mail == null) {
-            stringRedisTemplate.opsForValue().set("mail:" + mailId, "", 5, TimeUnit.MINUTES);
+            stringRedisTemplate.opsForValue().set("mail:" + mailId, "", MAIL_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
             return null;
         }
         // 存入redis
-        stringRedisTemplate.opsForValue().set("mail:" + mailId, JSONUtil.toJsonStr(mail), 5, TimeUnit.MINUTES);
+        stringRedisTemplate.opsForValue().set("mail:" + mailId, JSONUtil.toJsonStr(mail), MAIL_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
         MailVO mailVO = MailVO.builder()
                 .mailId(mail.getId())
                 .stampType(mail.getStampType())
@@ -114,7 +124,16 @@ public class MailServiceImpl implements MailService {
             // 查询数据库的时候肯定不能阻塞查询，让一个线程去查询数据库，其他的先返回空，等数据库查询完成后再返回
             RLock lock = redissonClient.getLock("lock:mails:all");
             try {
+                long t0 = System.nanoTime();
+                try { meterRegistry.counter("mail.lock.attempts").increment(); } catch (Exception ignored) {}
                 boolean b = lock.tryLock(5, 30, TimeUnit.SECONDS);
+                long waitNs = System.nanoTime() - t0;
+                if (b) {
+                    try { meterRegistry.counter("mail.lock.success").increment(); } catch (Exception ignored) {}
+                    try { meterRegistry.timer("mail.lock.wait").record(waitNs, java.util.concurrent.TimeUnit.NANOSECONDS); } catch (Exception ignored) {}
+                } else {
+                    try { meterRegistry.counter("mail.lock.fail").increment(); } catch (Exception ignored) {}
+                }
                 if (b) {
                     threadPoolConfig.threadPoolExecutor().execute(() -> {
                         // 查询数据库，查询所有邮件的id
@@ -219,7 +238,7 @@ public class MailServiceImpl implements MailService {
         mailMapper.insert(mail);
         stringRedisTemplate.opsForZSet().add("mails:all", mail.getId().toString(),
                 System.currentTimeMillis());
-        stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail), 5, TimeUnit.MINUTES);
+        stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail), MAIL_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
     }
 
     @Override
@@ -238,7 +257,7 @@ public class MailServiceImpl implements MailService {
                     return Result.error("原始邮件不存在或已删除");
                 }
                 // 将数据库中的邮件缓存到redis中
-                stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail), 5,
+                stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail), MAIL_CACHE_TTL_MINUTES,
                         TimeUnit.MINUTES);
             } else {
                 mail = JSONUtil.toBean(s, mail.class);
@@ -379,11 +398,17 @@ public class MailServiceImpl implements MailService {
             // 恢复缓存，缓存的key为mail:push:userId
             Long currentId = BaseContext.get();
             threadPoolConfig.threadPoolExecutor().execute(() -> {
-                for (ReceivedMail rm : page1.getResult()) {
-                    stringRedisTemplate.opsForZSet().add("mail:push:" + currentId,
-                            JSONUtil.toJsonStr(rm),
-                            System.currentTimeMillis());
-                }
+                stringRedisTemplate.executePipelined(new SessionCallback<Object>() {
+                    @Override
+                    public Object execute(RedisOperations operations) {
+                        for (ReceivedMail rm : page1.getResult()) {
+                            operations.opsForZSet().add("mail:push:" + currentId,
+                                    JSONUtil.toJsonStr(rm),
+                                    (double) System.currentTimeMillis());
+                        }
+                        return null;
+                    }
+                });
                 log.info("[邮件服务] 恢复缓存成功");
             });
             return PageResult.builder()

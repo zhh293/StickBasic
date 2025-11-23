@@ -1,6 +1,7 @@
 package com.tmd.WebSocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.util.concurrent.RateLimiter;
 import com.tmd.entity.dto.call.CallAction;
 import com.tmd.entity.dto.call.CallEndReason;
 import com.tmd.entity.dto.call.CallSession;
@@ -31,6 +32,7 @@ public class CallWebSocketServer {
     private static final Map<Long, ClientConnection> CONNECTIONS = new ConcurrentHashMap<>();
     private static final long HEARTBEAT_TIMEOUT_MS = 30_000;
 
+    private static final Map<Long, RateLimiter> RATE_LIMITERS = new ConcurrentHashMap<>();
     private static CallSessionService callSessionService;
 
     @Autowired
@@ -40,6 +42,15 @@ public class CallWebSocketServer {
 
     @OnOpen
     public void onOpen(Session session, @PathParam("userId") Long userId) {
+        if (CONNECTIONS.containsKey(userId)) {
+            // 关闭旧连接，保留新连接
+            ClientConnection oldConn = CONNECTIONS.get(userId);
+            try {
+                oldConn.session().close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT, "Duplicate connection"));
+            } catch (Exception e) {
+                log.warn("关闭重复连接失败 userId={}", userId, e);
+            }
+        }
         CONNECTIONS.put(userId, new ClientConnection(session));
         log.info("呼叫WebSocket建立 userId={} session={}", userId, session.getId());
         send(session, heartbeatAck());
@@ -47,6 +58,13 @@ public class CallWebSocketServer {
 
     @OnMessage
     public void onMessage(String message, @PathParam("userId") Long userId) {
+        // 获取或创建限流器（10 QPS）
+        RateLimiter limiter = RATE_LIMITERS.computeIfAbsent(userId, k -> RateLimiter.create(10));
+        if (!limiter.tryAcquire()) {
+            log.warn("用户信令频率超限 userId={}", userId);
+            send(userId, buildError(null, "RATE_LIMIT_EXCEEDED"));
+            return;
+        }
         try {
             CallSignalMessage signal = OBJECT_MAPPER.readValue(message, CallSignalMessage.class);
             log.debug("收到信令 userId={} action={} callId={}", userId, signal.getAction(), signal.getCallId());
@@ -118,6 +136,12 @@ public class CallWebSocketServer {
         send(callerId, ack);
     }
 
+
+
+//    到这个方法的时候实际上是被叫已经按下了接通键了吧，这时候被叫正在建立WEBRTC,同时主叫在这里处理完anwser相关的逻辑，然后就可以开始交流了
+/*    核心目的：让主叫方知道 “可以开始建立 WebRTC 连接了”
+    被叫按下接通键后，客户端会先发起 WebRTC 连接的初始化（比如收集本地 ICE 候选、生成 SDP Answer），但同时需要通过服务端告诉主叫：“我已经接了，你赶紧准备连接”—— 这就是服务端转发 ANSWER 信令的意义。
+    主叫方收到服务端转发的 ANSWER 信令后，就会触发本地 WebRTC 的后续流程（比如接收被叫的 SDP Answer、交换 ICE 候选），最终建立起端到端的媒体流连接（语音 / 视频数据直接在双方客户端之间传输，不经过服务端）。*/
     private void handleAnswer(Long userId, CallSignalMessage message) {
         Optional<CallSession> optional = callSessionService.getSession(message.getCallId());
         if (optional.isEmpty()) {
@@ -125,6 +149,11 @@ public class CallWebSocketServer {
             return;
         }
         CallSession session = optional.get();
+        // 新增：仅允许 RINGING 状态的呼叫被接听
+        if (session.getStatus() != CallStatus.RINGING) {
+            send(userId, buildError(message.getCallId(), "INVALID_CALL_STATUS"));
+            return;
+        }
         Long target = session.getCallerId().equals(userId) ? session.getCalleeId() : session.getCallerId();
         callSessionService.updateStatus(session.getCallId(), CallStatus.ACTIVE);
         message.setTimestamp(Instant.now().toEpochMilli());
@@ -206,7 +235,7 @@ public class CallWebSocketServer {
     private void send(Session session, CallSignalMessage message) {
         try {
             if (session != null && session.isOpen()) {
-                session.getBasicRemote().sendText(OBJECT_MAPPER.writeValueAsString(message));
+                session.getAsyncRemote().sendText(OBJECT_MAPPER.writeValueAsString(message));
             }
         } catch (IOException e) {
             log.error("发送信令失败 session={} action={}", session != null ? session.getId() : "N/A", message.getAction(), e);
