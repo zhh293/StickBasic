@@ -55,11 +55,11 @@ public class AiServiceimpl implements AiService {
     @Override
     public String extractMailInsights(String context) {
         String prompt = "请阅读以下邮件线程内容，输出一个JSON，包含字段：" +
-                "intent(字符串)，entities(数组)，deadlines(数组)，actions(数组[{title,owner,deadline,priority}])，tone(字符串)。\n内容：\n" + context;
-        String resp = chatClient.prompt()
+                "intent(字符串)，entities(数组)，deadlines(数组)，actions(数组[{title,owner,deadline,priority}])，tone(字符串)。\\n内容：\\n" + context;
+        String resp = runWithTimeoutAndRetry(() -> chatClient.prompt()
                 .user(prompt)
                 .call()
-                .content();
+                .content(), 3, 10_000L, 1000L);
         return normalizeInsightsJson(resp);
     }
 
@@ -68,10 +68,10 @@ public class AiServiceimpl implements AiService {
         String s = style == null ? "专业且礼貌" : style;
         String prompt = "基于以下邮件线程，生成" + count + "条" + s + "风格的中文回复建议。" +
                 "只返回JSON数组，每个元素为一条完整回复字符串。\n内容：\n" + context;
-        String resp = chatClient.prompt()
+        String resp = runWithTimeoutAndRetry(() -> chatClient.prompt()
                 .user(prompt)
                 .call()
-                .content();
+                .content(), 3, 10_000L, 1000L);
         java.util.List<String> list;
         try {
             list = com.alibaba.fastjson2.JSON.parseArray(resp, String.class);
@@ -89,6 +89,25 @@ public class AiServiceimpl implements AiService {
         }
         if (out.isEmpty()) out = java.util.List.of("好的，已收到。");
         return out;
+    }
+
+    private <T> T runWithTimeoutAndRetry(java.util.concurrent.Callable<T> callable, int maxAttempts, long timeoutMs, long backoffMs) {
+        int attempts = 0;
+        while (attempts < maxAttempts) {
+            attempts++;
+            java.util.concurrent.FutureTask<T> task = new java.util.concurrent.FutureTask<>(callable);
+            Thread t = new Thread(task, "ai-call-" + attempts);
+            t.setDaemon(true);
+            t.start();
+            try {
+                return task.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (Exception e) {
+                try { Thread.sleep(backoffMs); } catch (InterruptedException ignored) {}
+            } finally {
+                t.interrupt();
+            }
+        }
+        throw new RuntimeException("AI call timeout after retries");
     }
 
     private String normalizeInsightsJson(String insights) {

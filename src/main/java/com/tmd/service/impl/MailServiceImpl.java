@@ -525,10 +525,11 @@ public class MailServiceImpl implements MailService {
             return Result.success(normalized);
         }
         String genKey = "mail:agent:insight:gen:" + mailId;
-        Boolean scheduled = stringRedisTemplate.opsForValue().setIfAbsent(genKey, "1", 30, TimeUnit.SECONDS);
+        Boolean scheduled = stringRedisTemplate.opsForValue().setIfAbsent(genKey, "1", 5, TimeUnit.MINUTES);
         if (Boolean.TRUE.equals(scheduled)) {
             StringBuilder ctx = new StringBuilder();
             ctx.append("[原始邮件]\n").append(origin.getSenderNickname()).append(": ").append(origin.getContent()).append("\n");
+            PageHelper.startPage(1, 5);
             Page<ReceivedMail> page = receivedMailMapper.selectByUserId(uid);
             if (page != null && page.getResult() != null) {
                 java.util.List<ReceivedMail> thread = page.getResult().stream()
@@ -540,14 +541,18 @@ public class MailServiceImpl implements MailService {
                     ctx.append("[来信]\n").append(r.getSenderNickname()).append(": ").append(r.getContent()).append("\n");
                 }
             }
-            java.util.List<String> selfComments = stringRedisTemplate.opsForList().range("mail:comment:" + uid, 0, 2);
-            if (selfComments != null) {
-                for (String sc : selfComments) {
-                    MailComment mc = JSONUtil.toBean(sc, MailComment.class);
-                    if (mc != null && mailId.equals(mc.getMailId())) {
-                        ctx.append("[我的评论]\n").append(mc.getContent()).append("\n");
-                    }
+        java.util.List<String> selfComments = stringRedisTemplate.opsForList().range("mail:comment:" + uid, 0, 10);
+        if (selfComments != null) {
+            int added = 0;
+            for (String sc : selfComments) {
+                MailComment mc = JSONUtil.toBean(sc, MailComment.class);
+                if (mc != null && mailId.equals(mc.getMailId())) {
+                    ctx.append("[我的评论]\\n").append(mc.getContent()).append("\\n");
+                    added++;
+                    if (added >= 2) break;
                 }
+            }
+        }
             }
             threadPoolConfig.threadPoolExecutor().execute(() -> {
                 try {
@@ -556,6 +561,9 @@ public class MailServiceImpl implements MailService {
                     String json = JSONUtil.toJsonStr(normalized);
                     stringRedisTemplate.opsForValue().set(key, json, INSIGHT_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
                 } catch (Exception ignored) {}
+                finally {
+                    stringRedisTemplate.delete(genKey);
+                }
             });
         }
         return Result.success(Collections.singletonMap("processing", true));
