@@ -25,6 +25,10 @@ import org.springframework.stereotype.Service;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.RedisOperations;
+import com.tmd.service.AiService;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Collections;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -59,8 +63,11 @@ public class MailServiceImpl implements MailService {
     private RedisIdWorker redisIdWorker;
     @Autowired
     private MeterRegistry meterRegistry;
+    @Autowired
+    private AiService aiService;
 
     private static final long MAIL_CACHE_TTL_MINUTES = 5;
+    private static final long INSIGHT_CACHE_TTL_MINUTES = 2;
 
     @Override
     public MailVO getMailById(Integer mailId) {
@@ -502,5 +509,116 @@ public class MailServiceImpl implements MailService {
                 .total(dbTotal > 0 ? dbTotal : (total == null ? 0L : total))
                 .rows(rows)
                 .build();
+    }
+
+    @Override
+    public Result agentInsight(Long mailId) {
+        mail origin = mailMapper.selectById(mailId.intValue());
+        if (origin == null) {
+            return Result.error("原始邮件不存在或已删除");
+        }
+        Long uid = BaseContext.get();
+        String key = "mail:agent:insight:" + mailId;
+        String cached = stringRedisTemplate.opsForValue().get(key);
+        if (StrUtil.isNotBlank(cached)) {
+            Map<String, Object> normalized = normalizeInsights(cached);
+            return Result.success(normalized);
+        }
+        String genKey = "mail:agent:insight:gen:" + mailId;
+        Boolean scheduled = stringRedisTemplate.opsForValue().setIfAbsent(genKey, "1", 30, TimeUnit.SECONDS);
+        if (Boolean.TRUE.equals(scheduled)) {
+            StringBuilder ctx = new StringBuilder();
+            ctx.append("[原始邮件]\n").append(origin.getSenderNickname()).append(": ").append(origin.getContent()).append("\n");
+            Page<ReceivedMail> page = receivedMailMapper.selectByUserId(uid);
+            if (page != null && page.getResult() != null) {
+                java.util.List<ReceivedMail> thread = page.getResult().stream()
+                        .filter(r -> r.getOriginalMailId() != null && r.getOriginalMailId().equals(mailId))
+                        .sorted(java.util.Comparator.comparing(ReceivedMail::getCreateAt))
+                        .limit(5)
+                        .collect(java.util.stream.Collectors.toList());
+                for (ReceivedMail r : thread) {
+                    ctx.append("[来信]\n").append(r.getSenderNickname()).append(": ").append(r.getContent()).append("\n");
+                }
+            }
+            java.util.List<String> selfComments = stringRedisTemplate.opsForList().range("mail:comment:" + uid, 0, 2);
+            if (selfComments != null) {
+                for (String sc : selfComments) {
+                    MailComment mc = JSONUtil.toBean(sc, MailComment.class);
+                    if (mc != null && mailId.equals(mc.getMailId())) {
+                        ctx.append("[我的评论]\n").append(mc.getContent()).append("\n");
+                    }
+                }
+            }
+            threadPoolConfig.threadPoolExecutor().execute(() -> {
+                try {
+                    String insights = aiService.extractMailInsights(ctx.toString());
+                    Map<String, Object> normalized = normalizeInsights(insights);
+                    String json = JSONUtil.toJsonStr(normalized);
+                    stringRedisTemplate.opsForValue().set(key, json, INSIGHT_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
+                } catch (Exception ignored) {}
+            });
+        }
+        return Result.success(Collections.singletonMap("processing", true));
+    }
+
+    @Override
+    public Result agentSuggest(Long mailId, Integer count, String style) {
+        int c = count == null || count < 1 ? 3 : Math.min(count, 5);
+        mail origin = mailMapper.selectById(mailId.intValue());
+        if (origin == null) {
+            return Result.error("原始邮件不存在或已删除");
+        }
+        Long uid = BaseContext.get();
+        StringBuilder ctx = new StringBuilder();
+        ctx.append("[原始邮件]\n").append(origin.getSenderNickname()).append(": ").append(origin.getContent()).append("\n");
+        Set<String> set = stringRedisTemplate.opsForZSet().rangeByScore("mail:push:" + uid, 0, System.currentTimeMillis(), 0, 5);
+        if (set != null) {
+            for (String s : set) {
+                ReceivedMail rm = JSONUtil.toBean(s, ReceivedMail.class);
+                if (rm != null && mailId.equals(rm.getOriginalMailId())) {
+                    ctx.append("[来信]\n").append(rm.getSenderNickname()).append(": ").append(rm.getContent()).append("\n");
+                }
+            }
+        }
+        java.util.List<String> suggestions = aiService.generateReplySuggestions(ctx.toString(), c, style);
+        if (suggestions == null || suggestions.isEmpty()) {
+            suggestions = java.util.List.of(origin.getContent());
+        }
+        return Result.success(suggestions);
+    }
+
+    private Map<String, Object> normalizeInsights(String insights) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("intent", "");
+        result.put("entities", new java.util.ArrayList<>());
+        result.put("deadlines", new java.util.ArrayList<>());
+        result.put("actions", new java.util.ArrayList<>());
+        result.put("tone", "");
+        try {
+            cn.hutool.json.JSONObject obj = cn.hutool.json.JSONUtil.parseObj(insights);
+            Object intent = obj.get("intent");
+            Object entities = obj.get("entities");
+            Object deadlines = obj.get("deadlines");
+            Object actions = obj.get("actions");
+            Object tone = obj.get("tone");
+            if (intent instanceof CharSequence) {
+                result.put("intent", intent.toString());
+            }
+            if (tone instanceof CharSequence) {
+                result.put("tone", tone.toString());
+            }
+            if (entities instanceof java.util.List) {
+                result.put("entities", entities);
+            }
+            if (deadlines instanceof java.util.List) {
+                result.put("deadlines", deadlines);
+            }
+            if (actions instanceof java.util.List) {
+                result.put("actions", actions);
+            }
+        } catch (Exception e) {
+            result.put("raw", insights);
+        }
+        return result;
     }
 }

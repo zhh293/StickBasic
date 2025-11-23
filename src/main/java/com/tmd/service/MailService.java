@@ -19,4 +19,8 @@ public interface MailService {
     PageResult getReceivedMails(Integer page, Integer size, String status);
 
     PageResult getSelfCommentMails(Integer page, Integer size);
+
+    Result agentInsight(Long mailId);
+
+    Result agentSuggest(Long mailId, Integer count, String style);
 }

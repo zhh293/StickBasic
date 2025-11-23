@@ -65,5 +65,15 @@ public class mailController {
         return Result.success(mailService.getSelfCommentMails(p, s));
     }
 
+    @GetMapping("/{mailId}/agent/insight")
+    public Result agentInsight(@PathVariable Long mailId){
+        return mailService.agentInsight(mailId);
+    }
 
+    @PostMapping("/{mailId}/agent/suggest")
+    public Result agentSuggest(@PathVariable Long mailId,
+                               @RequestParam(required = false) Integer count,
+                               @RequestParam(required = false) String style){
+        return mailService.agentSuggest(mailId, count, style);
+    }
 }
