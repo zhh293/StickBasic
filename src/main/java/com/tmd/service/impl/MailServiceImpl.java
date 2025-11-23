@@ -526,8 +526,9 @@ public class MailServiceImpl implements MailService {
         }
         String genKey = "mail:agent:insight:gen:" + mailId;
         Boolean scheduled = stringRedisTemplate.opsForValue().setIfAbsent(genKey, "1", 5, TimeUnit.MINUTES);
+        StringBuilder ctx = new StringBuilder();
         if (Boolean.TRUE.equals(scheduled)) {
-            StringBuilder ctx = new StringBuilder();
+
             ctx.append("[原始邮件]\n").append(origin.getSenderNickname()).append(": ").append(origin.getContent()).append("\n");
             PageHelper.startPage(1, 5);
             Page<ReceivedMail> page = receivedMailMapper.selectByUserId(uid);
@@ -565,10 +566,8 @@ public class MailServiceImpl implements MailService {
                     stringRedisTemplate.delete(genKey);
                 }
             });
-        }
         return Result.success(Collections.singletonMap("processing", true));
-    }
-
+        }
     @Override
     public Result agentSuggest(Long mailId, Integer count, String style) {
         int c = count == null || count < 1 ? 3 : Math.min(count, 5);
@@ -629,4 +628,5 @@ public class MailServiceImpl implements MailService {
         }
         return result;
     }
-}
+    }
+

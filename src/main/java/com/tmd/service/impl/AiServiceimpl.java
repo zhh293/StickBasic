@@ -4,22 +4,16 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.tmd.entity.po.PStick;
-import com.tmd.entity.po.PStickQueryParam;
 import com.tmd.mapper.AiMapper;
 import com.tmd.service.AiService;
-import jdk.jfr.Event;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import cn.hutool.json.JSONUtil;
-import cn.hutool.json.JSONObject;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDate;
 import java.time.LocalDateTime;
-
-import static org.springframework.ai.chat.client.advisor.AbstractChatMemoryAdvisor.CHAT_MEMORY_CONVERSATION_ID_KEY;
 
 /**
  * @Description
@@ -118,7 +112,7 @@ public class AiServiceimpl implements AiService {
         result.put("actions", new java.util.ArrayList<>());
         result.put("tone", "");
         try {
-            JSONObject obj = JSONUtil.parseObj(insights);
+            JSONObject obj = JSON.parseObject(insights);
             Object intent = obj.get("intent");
             Object entities = obj.get("entities");
             Object deadlines = obj.get("deadlines");
