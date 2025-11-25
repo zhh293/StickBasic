@@ -1,13 +1,13 @@
 server:
-  port: 8080
+  port: 8082
 spring:
   application:
     name: BasicBack
   datasource:
-    url: jdbc:postgresql://localhost:5432/basic
-    username: postgres
-    password: jinmuyan1314217
-    driver-class-name: org.postgresql.Driver
+    url: jdbc:mysql://localhost:3306/sticknew?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&SSL=false
+    username: root
+    password: zhang20061023@
+    driver-class-name: com.mysql.cj.jdbc.Driver
   data:
     redis:
       host: localhost
@@ -18,6 +18,12 @@ spring:
           max-active: 10
           max-idle: 10
           min-idle: 0
+  rabbitmq:
+    virtual-host: /
+    username: admin
+    password: admin123456
+    host: localhost
+    port: 5672
   ai:
     openai:
       api-key: sk-35b17d7ae2a0404fafe57a5ba2ad6ef3
@@ -114,18 +120,18 @@ call:
   connection:
     cleanup-interval-ms: 30000
 
-wechat:
-  pay:
-    enabled: true
-    mock: true # 开发联调阶段可为 true，生产置为 false
-    app-id: your-app-id
-    mch-id: your-mch-id
-    api-v3-key: your-api-v3-key
-    private-key-path: file:/path/to/your/apiclient_key.pem
-    cert-serial-no: your-cert-serial-no
-    platform-cert-path: file:/path/to/platform_cert.pem
-    notify-url: http://localhost:8080/api/pay/wechat/notify
-    refund-notify-url: http://localhost:8080/api/pay/wechat/refund/notify
+#wechat:
+#  pay:
+#    enabled: true
+#    mock: true # 开发联调阶段可为 true，生产置为 false
+#    app-id: your-app-id
+#    mch-id: your-mch-id
+#    api-v3-key: your-api-v3-key
+#    private-key-path: file:/path/to/your/apiclient_key.pem
+#    cert-serial-no: your-cert-serial-no
+#    platform-cert-path: file:/path/to/platform_cert.pem
+#    notify-url: http://localhost:8080/api/pay/wechat/notify
+#    refund-notify-url: http://localhost:8080/api/pay/wechat/refund/notify
 
 
 

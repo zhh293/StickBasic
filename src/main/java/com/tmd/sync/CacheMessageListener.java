@@ -1,3 +1,4 @@
+/*
 package com.tmd.sync;
 
 
@@ -31,3 +32,4 @@ public class CacheMessageListener implements MessageListener {
         redisCaffeineCacheManager.clearLocal(cacheMessage.getCacheName(), cacheMessage.getKey());
     }
 }
+*/

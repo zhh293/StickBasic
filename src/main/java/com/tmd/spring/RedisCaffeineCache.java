@@ -1,3 +1,4 @@
+/*
 package com.tmd.spring;
 
 import com.github.benmanes.caffeine.cache.Cache;
@@ -24,19 +25,25 @@ public class RedisCaffeineCache extends AbstractValueAdaptingCache {
 
 	private final Logger logger = LoggerFactory.getLogger(RedisCaffeineCache.class);
 
-	/**
+	*/
+/**
 	 * 缓存名称
-	 */
+	 *//*
+
 	private String cacheName;
 
-	/**
+	*/
+/**
 	 * 一级缓存
-	 */
+	 *//*
+
 	private Cache<Object, Object> level1Cache;
 
-	/**
+	*/
+/**
 	 * 二级缓存实例
-	 */
+	 *//*
+
 	private RedisCache1 level2Cache;
 
 
@@ -48,12 +55,14 @@ public class RedisCaffeineCache extends AbstractValueAdaptingCache {
 
 	private L2CacheConfig.Redis redisConfig;
 
-	/**
+	*/
+/**
 	 * 记录是否启用过一级缓存，只要启用过，则记录为true
 	 * <p>
 	 * 以下情况可能造成本地缓存与redis缓存不一致的情况 : 开启本地缓存，更新用户数据后，关闭本地缓存,更新用户信息到redis，开启本地缓存
 	 * 解决方法：put、evict的情况下，判断配置中心一级缓存开关已关闭且本地一级缓存开关已开启的情况下，清除一级缓存
-	 */
+	 *//*
+
 	private AtomicBoolean openedL1Cache = new AtomicBoolean();
 
 	private String topic = "cache:redis:caffeine:topic";
@@ -142,9 +151,11 @@ public class RedisCaffeineCache extends AbstractValueAdaptingCache {
 		}
 	}
 
-	/**
+	*/
+/**
 	 * 使用putIfAbsent方法添加键值对，如果map集合中没有该key对应的值，则直接添加，并返回null，如果已经存在对应的值，则依旧为原来的值。
-	 */
+	 *//*
+
 	@Override
 	public ValueWrapper putIfAbsent(Object key, Object value) {
 		String cacheKey = getKey(key);
@@ -191,9 +202,11 @@ public class RedisCaffeineCache extends AbstractValueAdaptingCache {
 		level1Cache.invalidateAll();
 	}
 
-	/**
+	*/
+/**
 	 *
-	 */
+	 *//*
+
 	@Override
 	protected Object lookup(Object key) {
 		Object value = null;
@@ -234,19 +247,23 @@ public class RedisCaffeineCache extends AbstractValueAdaptingCache {
 		return cacheNameExpire == null ? expire : cacheNameExpire.longValue();
 	}
 
-	/**
+	*/
+/**
 	 * @param message
 	 * @description 缓存变更时通知其他节点清理本地缓存
 
-	 */
+	 *//*
+
 	private void push(CacheMessage message) {
 		level2Cache.getRedisTemplate().convertAndSend(redisConfig.getTopic(), message);
 	}
 
-	/**
+	*/
+/**
 	 * @param key
 	 * @description 清理本地缓存
-	 */
+	 *//*
+
 	public void clearLocal(Object key) {
 		logger.debug("clear local cache, the key is : {}", key);
 		if (key == null) {
@@ -256,12 +273,14 @@ public class RedisCaffeineCache extends AbstractValueAdaptingCache {
 		}
 	}
 
-	/**
+	*/
+/**
 	 * 查询是否开启一级缓存
 	 *
 	 * @param key 缓存key
 	 * @return
-	 */
+	 *//*
+
 	private boolean ifL1Open(Object key) {
 		// 检测开关与缓存名称
 		if (ifL1Open()) {
@@ -272,11 +291,13 @@ public class RedisCaffeineCache extends AbstractValueAdaptingCache {
 		return ifL1OpenByKey(key);
 	}
 
-	/**
+	*/
+/**
 	 * 本地缓存检测，检测开关与缓存名称
 	 *
 	 * @return
-	 */
+	 *//*
+
 	private boolean ifL1Open() {
 		// 判断是否开启过本地缓存
 		if (composite.isL1AllOpen() || composite.isL1Manual()) {
@@ -297,12 +318,14 @@ public class RedisCaffeineCache extends AbstractValueAdaptingCache {
 		return false;
 	}
 
-	/**
+	*/
+/**
 	 * 本地缓存检测，检测key
 	 *
 	 * @param key
 	 * @return
-	 */
+	 *//*
+
 	private boolean ifL1OpenByKey(Object key) {
 		// 是否使用手动匹配开关
 		if (composite.isL1Manual()) {
@@ -316,3 +339,4 @@ public class RedisCaffeineCache extends AbstractValueAdaptingCache {
 		return false;
 	}
 }
+*/

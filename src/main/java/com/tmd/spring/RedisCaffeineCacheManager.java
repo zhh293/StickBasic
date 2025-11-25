@@ -1,3 +1,4 @@
+/*
 package com.tmd.spring;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -92,3 +93,4 @@ public class RedisCaffeineCacheManager implements CacheManager {
 		redisCaffeineCache.clearLocal(key);
 	}
 }
+*/

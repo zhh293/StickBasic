@@ -69,7 +69,7 @@ public class Task {
                         .updatedAt(LocalDateTime.now())
                                 .status(UserStatus.active)
                                         .build();
-        userMapper.updateAccountDays(user);
+//        userMapper.updateAccountDays(user);
         log.info("[定时任务] 增加成功");
     }
 }
