@@ -1,8 +1,9 @@
+/*
 package com.tmd.config;
 
 
 
-import com.tmd.spring.RedisCaffeineCacheManager;
+//import com.tmd.spring.RedisCaffeineCacheManager;
 import com.tmd.sync.CacheMessageListener;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
@@ -65,9 +66,10 @@ public class CacheRedisCaffeineAutoConfiguration {
 	@Bean
 	@ConditionalOnBean(RedisTemplate.class)
 	@Order(1)
-	public RedisCache1 redisCache(RedisTemplate<Object, Object> stringKeyRedisTemplate) {
+	public RedisCache1 customRedisCache(RedisTemplate<Object, Object> stringKeyRedisTemplate) {
 		RedisCache1 redisCache = new RedisCache1();
 		redisCache.setRedisTemplate(stringKeyRedisTemplate);
 		return redisCache;
 	}
 }
+*/

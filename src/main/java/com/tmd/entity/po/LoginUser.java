@@ -42,14 +42,16 @@ public class LoginUser implements UserDetails {
         if(authorities!= null){
             return authorities;
         }
-        authorities = permissions.stream()
-                .map(new Function<String, SimpleGrantedAuthority>() {
-                    @Override
-                    public SimpleGrantedAuthority apply(String permission) {
-                        return new SimpleGrantedAuthority(permission);
-                    }
-                })
-                .collect(Collectors.toSet());
+        if(permissions!= null) {
+            authorities = permissions.stream()
+                    .map(new Function<String, SimpleGrantedAuthority>() {
+                        @Override
+                        public SimpleGrantedAuthority apply(String permission) {
+                            return new SimpleGrantedAuthority(permission);
+                        }
+                    })
+                    .collect(Collectors.toSet());
+        }
         log.info("authorities:{}",authorities);
         log.info("哈哈哈，我来了");
         return authorities;

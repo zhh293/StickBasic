@@ -10,6 +10,7 @@ public interface FuncMapper {
     @Insert("insert into sayings(saying) values(#{saying})")
     void insertsaying(String saying);
 
-    @Select("select saying from sayings order by RANDOM() limit 1")
+    @Select("select saying from sayings order by RAND() limit 1") // 修改点：RANDOM() -> RAND()
     String saying();
+
 }

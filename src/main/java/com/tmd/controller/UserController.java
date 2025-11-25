@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import com.tmd.entity.dto.FileUploadResponse;
 import cn.hutool.core.util.StrUtil;
@@ -79,11 +80,20 @@ public class UserController {
     }
     @GetMapping("/user/profile")
     public Result getUserProfile(
-            @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization
+            @RequestHeader("authentication") String authorization
     ) {
-        var id = SimpleTools.checkToken(authorization);
+        Long userId=BaseContext.get();
+        log.info("用户正在获取用户信息:{}", BaseContext.get());
+        var id =1;
         if (id != ERROR_CODE){
-            UserProfile userProfile = userService.getProfile(id);
+            String s = stringRedisTemplate.opsForValue().get("login:" + authorization);
+            if(!StringUtils.hasText(s)){
+                return Result.error("验证失败,非法访问");
+            }
+            LoginUser loginUser = JSONUtil.toBean(s, LoginUser.class);
+            log.info("用户id为{}",userId);
+            log.info("threadLocal所取得id为{}",BaseContext.get());
+            UserProfile userProfile = userService.getProfile(userId);
             return Result.success(userProfile);
         }
         return Result.error("验证失败,非法访问");

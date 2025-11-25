@@ -4,6 +4,7 @@ import com.tmd.config.RabbitMQConfig;
 import com.tmd.entity.dto.UserContent;
 import com.tmd.publisher.TopicModerationMessage;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class MessageProducer {
@@ -30,7 +32,7 @@ public class MessageProducer {
             message.setType("direct");
         }
         if(content instanceof Long){
-            message.setId(content.toString());
+            message.setId(cn.hutool.core.lang.UUID.fastUUID().toString());
             message.setContent(content);
             message.setType("direct");
             message.setSendTime(LocalDateTime.now());
@@ -39,6 +41,7 @@ public class MessageProducer {
         // 根据参数选择不同的路由键
         String routingKey = isRoutingKey1 ? RabbitMQConfig.DIRECT_ROUTING_KEY_1 : RabbitMQConfig.DIRECT_ROUTING_KEY_2;
 
+        log.info("发送消息：{}", message);
         // 发送消息，参数：交换机、路由键、消息内容、消息ID(用于确认机制)
         rabbitTemplate.convertAndSend(
                 RabbitMQConfig.DIRECT_EXCHANGE,

@@ -135,8 +135,6 @@ public class MessageConsumer {
                         log.error("撤回话题失败: topicId={}", topicId, e);
                     }
                 }
-
-                channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
                 return;
             }
 
@@ -246,7 +244,7 @@ public class MessageConsumer {
                 log.info("邮件已成功发送到: {}", mailDTO.getRecipientEmail());
             }
 
-            channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
+//            channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
         } catch (Exception e) {
             log.error("处理Direct队列2消息出错", e);
             channel.basicNack(amqpMessage.getMessageProperties().getDeliveryTag(), false, true);

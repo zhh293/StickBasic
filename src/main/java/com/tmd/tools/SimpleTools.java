@@ -34,6 +34,7 @@ public class SimpleTools {
         Optional<Map<String, Claim>> claims = JwtUtil.getClaims(token);
         Long userId = claims.get().get("uid").asLong();
 
+
         // 3. 查库并返回
         UserProfile userProfile = userService.getProfile(userId);
         if (userProfile != null) {

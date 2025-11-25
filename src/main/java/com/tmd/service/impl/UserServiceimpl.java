@@ -1,6 +1,7 @@
 package com.tmd.service.impl;
 
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.json.JSONUtil;
 import com.alibaba.fastjson.JSONObject;
 import com.tmd.config.RedisCache;
 import com.tmd.entity.dto.Result;
@@ -15,6 +16,7 @@ import com.tmd.tools.JwtUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -48,6 +50,8 @@ public class UserServiceimpl implements UserService, UserDetailsService {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
     @Override
     public boolean register(UserData userData)
     {
@@ -65,7 +69,7 @@ public class UserServiceimpl implements UserService, UserDetailsService {
             throw new RuntimeException("用户名或密码错误");
         }
         Object principal = authenticate.getPrincipal();
-        LoginUser loginUser = JSONObject.parseObject(principal.toString(), LoginUser.class);
+        LoginUser loginUser = (LoginUser) principal;
         //生成jwt令牌，并且存入Redis中
         Map<String,Long> map=new HashMap<>();
         map.put("id",loginUser.getUser().getId());
@@ -80,22 +84,27 @@ public class UserServiceimpl implements UserService, UserDetailsService {
     @Override
     public UserProfile getProfile(Long userId) {
         // 优先从缓存读取基础资料
+        log.info("正在读取用户基础资料: userId={}", userId);
         String profileKey = "user:profile:" + userId;
-        UserProfile userProfile = redisCache.getCacheObject(profileKey);
+        String s = stringRedisTemplate.opsForValue().get(profileKey);
+        UserProfile userProfile = JSONUtil.toBean(s, UserProfile.class);
         if (userProfile == null) {
             userProfile = userMapper.getProfile(userId);
+            log.info(":读取的数据{}", userProfile);
             if (userProfile != null) {
                 // 缓存基础资料 10 分钟，避免频繁 DB 访问
-                redisCache.setCacheObject(profileKey, userProfile, 600, TimeUnit.SECONDS);
+                stringRedisTemplate.opsForValue().set("user:profile:" + userId, JSONUtil.toJsonStr(userProfile), 10, TimeUnit.MINUTES);
             }
         }
         String dailyBookmark=redisCache.getCacheObject("bookmark:"+userId);
+        log.info(":读取的书签{}", dailyBookmark);
         if(StrUtil.isNotBlank(dailyBookmark)){
             userProfile.setIsFirst(false);
             userProfile.setDailyBookmark(dailyBookmark);
             return userProfile;
         }else{
             //生成书签
+            log.info("生成书签: userId={}", userId);
             messageProducer.sendDirectMessage(userId, true);
             userProfile.setIsFirst(true);
             return userProfile;
@@ -138,7 +147,7 @@ public class UserServiceimpl implements UserService, UserDetailsService {
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
         log.info("[用户登录] 尝试登录用户: {}", username);
         //开始匹配并且放入
-        if(StringUtils.hasText(username)){
+        if(!StringUtils.hasText(username)){
             throw new UsernameNotFoundException("不要填空值");
         }
         UserData user = userMapper.check(username);

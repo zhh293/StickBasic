@@ -47,8 +47,10 @@ public class SecurityConfig {
                 .authorizeHttpRequests(authz -> authz
                         .requestMatchers("/login", "/public/login/gitee/config",
                                 "/public/login/gitee", "/public/login/ZKP",
-                                "/public/login/button", "/home","/ai1/chat","/register").anonymous()
+                                "/public/login/button", "/home","/ai1/chat","/register","/captcha/generate").anonymous()
                         .requestMatchers("/metrics/perf").permitAll()
+                        //先放开所有接口吧
+                        .requestMatchers("/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationTokenFilter, UsernamePasswordAuthenticationFilter.class)
