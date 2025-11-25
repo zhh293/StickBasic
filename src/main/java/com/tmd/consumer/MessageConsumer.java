@@ -93,7 +93,12 @@ public class MessageConsumer {
 
             // 处理业务逻辑...
             Object content = message.getContent();
+            if(content instanceof Integer){
+                long l = ((Integer) content).longValue();
+                content = l;
+            }
 
+            log.info("消息内容类型: {}", content != null ? content.getClass().getName() : "null");
             // 处理话题审核消息
             if ("topic_moderation".equals(message.getType()) && content instanceof TopicModerationMessage moderationMsg) {
                 Long topicId = moderationMsg.getTopicId();
