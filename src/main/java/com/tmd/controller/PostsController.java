@@ -91,8 +91,28 @@ public class PostsController {
         if (postId == null || postId <= 0) {
             return Result.error("参数错误");
         }
-        // 用户体验优先：快速返回，服务层负责高并发与缓存一致性
         return postsService.recordView(postId);
+    }
+
+    @PostMapping("/{postId}/like")
+    public Result toggleLike(@PathVariable Long postId,
+                             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
+        Long userId = BaseContext.get();
+        if (postId == null || postId <= 0) {
+            return Result.error("参数错误");
+        }
+        return postsService.toggleLike(postId);
+    }
+
+    @GetMapping("/likes")
+    public Result getUserLikes(@RequestParam(defaultValue = "1") Integer page,
+                               @RequestParam(defaultValue = "20") Integer size,
+                               @RequestParam(defaultValue = "post") String targetType) {
+        Long userId = BaseContext.get();
+        if (userId == null || userId <= 0) {
+            return Result.error("未登录");
+        }
+        return postsService.getUserLikes(page, size, targetType);
     }
 
     @GetMapping("/share/{token}")

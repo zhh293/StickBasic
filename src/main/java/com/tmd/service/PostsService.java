@@ -23,4 +23,10 @@ public interface PostsService {
     Result createShareLink(Long userId, Long postId, String channel);
 
     Result openShareLink(String token);
+
+    Result recordView(Long postId);
+
+    Result toggleLike(Long postId);
+
+    Result getUserLikes(Integer page, Integer size, String targetType);
 }
