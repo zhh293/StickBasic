@@ -26,6 +26,7 @@ public class Post {
     private Integer shareCount;
     private Integer viewCount;
     private String publishLocation;
+    private Integer collectCount;
     //经纬度
     private BigDecimal latitude;
     private BigDecimal longitude;

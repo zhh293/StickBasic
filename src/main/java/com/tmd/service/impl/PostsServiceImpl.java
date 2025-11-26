@@ -325,7 +325,10 @@ public class PostsServiceImpl implements PostsService {
                         String val = stringRedisTemplate.opsForValue().get(flushKey);
                         int pending = 0;
                         if (StrUtil.isNotBlank(val)) {
-                            try { pending = Integer.parseInt(val); } catch (Exception ignore) {}
+                            try {
+                                pending = Integer.parseInt(val);
+                            } catch (Exception ignore) {
+                            }
                         }
                         if (pending >= POST_VIEW_FLUSH_THRESHOLD) {
                             String lockKey = "lock:post:view:flush:" + postId;
@@ -333,13 +336,17 @@ public class PostsServiceImpl implements PostsService {
                             boolean ok = false;
                             try {
                                 ok = lock.tryLock(5, 10, java.util.concurrent.TimeUnit.SECONDS);
-                            } catch (InterruptedException ignored) {}
+                            } catch (InterruptedException ignored) {
+                            }
                             if (ok) {
                                 try {
                                     String cur = stringRedisTemplate.opsForValue().get(flushKey);
                                     int delta = 0;
                                     if (StrUtil.isNotBlank(cur)) {
-                                        try { delta = Integer.parseInt(cur); } catch (Exception ignore) {}
+                                        try {
+                                            delta = Integer.parseInt(cur);
+                                        } catch (Exception ignore) {
+                                        }
                                     }
                                     if (delta > 0) {
                                         postsMapper.incrViewCount(postId, delta);
@@ -349,17 +356,29 @@ public class PostsServiceImpl implements PostsService {
                                             Script script = new Script(ScriptType.INLINE, "painless", "ctx._source.viewCount = (ctx._source.viewCount != null ? ctx._source.viewCount : 0) + params.viewDelta", params);
                                             UpdateRequest ur = new UpdateRequest(INDEX_POSTS, String.valueOf(postId)).script(script);
                                             esClient.update(ur, RequestOptions.DEFAULT);
-                                        } catch (Exception ignore) {}
-                                        try { stringRedisTemplate.opsForValue().decrement(flushKey, delta); } catch (Exception ignore) {}
+                                        } catch (Exception ignore) {
+                                        }
+                                        try {
+                                            stringRedisTemplate.opsForValue().decrement(flushKey, delta);
+                                        } catch (Exception ignore) {
+                                        }
                                     }
                                 } finally {
-                                    try { lock.unlock(); } catch (Exception ignore) {}
+                                    try {
+                                        lock.unlock();
+                                    } catch (Exception ignore) {
+                                    }
                                 }
                             }
                         }
-                    } catch (Exception ignore) {}
-                });
 
+
+                    } catch (Exception ignore) {
+                    }
+                } catch (Exception e) {
+                    log.error("记录浏览量失败", e);
+                }
+            });
             return Result.success("记录成功");
         } catch (Exception e) {
             return Result.error("服务器繁忙");
@@ -909,6 +928,7 @@ public class PostsServiceImpl implements PostsService {
                     doc.put("authorUsername", username);
                     doc.put("authorAvatar", avatar);
                     doc.put("topicName", topicName);
+                    doc.put("collectCount", post.getCollectCount());
                     doc.put("likeCount", post.getLikeCount());
                     doc.put("commentCount", post.getCommentCount());
                     doc.put("shareCount", post.getShareCount());

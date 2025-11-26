@@ -53,7 +53,7 @@ public class SecurityConfig {
                         .requestMatchers("/**").permitAll()
                         .anyRequest().authenticated()
                 )
-                .addFilterBefore(jwtAuthenticationTokenFilter, UsernamePasswordAuthenticationFilter.class)
+//                .addFilterBefore(jwtAuthenticationTokenFilter, UsernamePasswordAuthenticationFilter.class)
                 //配置异常处理器
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((AuthenticationEntryPoint) authenticationHandler)
