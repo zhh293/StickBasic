@@ -8,6 +8,7 @@ import com.tmd.mapper.AttachmentMapper;
 import com.tmd.mapper.PostsMapper;
 import com.tmd.mapper.TopicMapper;
 import com.tmd.mapper.LikesMapper;
+import com.tmd.mapper.FavoriteMapper;
 import com.tmd.mapper.UserMapper;
 import com.tmd.service.PostsService;
 import com.tmd.service.AttachmentService;
@@ -50,6 +51,7 @@ public class PostsServiceImpl implements PostsService {
     private final UserMapper userMapper;
     private final TopicMapper topicMapper;
     private final LikesMapper likesMapper;
+    private final FavoriteMapper favoriteMapper;
 
     @Autowired
     private AttachmentService attachmentService;
@@ -89,6 +91,11 @@ public class PostsServiceImpl implements PostsService {
     private static final String USER_LIKES_SET_FMT = "user:likes:set:%d";
     private static final String POST_LIKE_FLUSH_KEY_FMT = "post:like:flush:%d";
     private static final int POST_LIKE_FLUSH_THRESHOLD = 50;
+
+    private static final String POST_FAV_USERS_SET_FMT = "post:fav:users:%d";
+    private static final String USER_FAVS_SET_FMT = "user:favs:set:%d";
+    private static final String POST_FAV_FLUSH_KEY_FMT = "post:fav:flush:%d";
+    private static final int POST_FAV_FLUSH_THRESHOLD = 50;
 
     @Override
     public Result getPosts(Integer page, Integer size, String type, String status, String sort)
@@ -484,6 +491,136 @@ public class PostsServiceImpl implements PostsService {
             if (size == null || size < 1) size = 20;
             int offset = (page - 1) * size;
             java.util.List<java.util.Map<String, Object>> list = likesMapper.selectByUser(uid, targetType, offset, size);
+            return Result.success(list);
+        } catch (Exception e) {
+            return Result.error("服务器繁忙");
+        }
+    }
+
+    @Override
+    public Result toggleFavorite(Long postId) {
+        try {
+            Long uid = com.tmd.tools.BaseContext.get();
+            if (uid == null || uid <= 0) return Result.error("未登录");
+            if (postId == null || postId <= 0) return Result.error("参数错误");
+
+            String lockKey = "lock:post:fav:" + postId + ":" + uid;
+            var lock = redissonClient.getLock(lockKey);
+            boolean ok = false;
+            try { ok = lock.tryLock(3, 5, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+            if (!ok) return Result.error("频繁操作");
+            try {
+                String postSetKey = String.format(POST_FAV_USERS_SET_FMT, postId);
+                Boolean mem = stringRedisTemplate.opsForSet().isMember(postSetKey, String.valueOf(uid));
+                boolean collected;
+                if (mem == null || !mem) {
+                    int c = favoriteMapper.exists(uid, postId);
+                    collected = c > 0;
+                    if (collected) stringRedisTemplate.opsForSet().add(postSetKey, String.valueOf(uid));
+                } else {
+                    collected = true;
+                }
+
+                final boolean targetCollect = !collected;
+                stringRedisTemplate.executePipelined(new org.springframework.data.redis.core.SessionCallback<Object>() {
+                    @Override
+                    public Object execute(org.springframework.data.redis.core.RedisOperations operations) {
+                        String postSet = String.format(POST_FAV_USERS_SET_FMT, postId);
+                        String userSet = String.format(USER_FAVS_SET_FMT, uid);
+                        String flushKey = String.format(POST_FAV_FLUSH_KEY_FMT, postId);
+                        if (targetCollect) {
+                            operations.opsForSet().add(postSet, String.valueOf(uid));
+                            operations.opsForSet().add(userSet, String.valueOf(postId));
+                            operations.opsForValue().increment(flushKey, 1);
+                        } else {
+                            operations.opsForSet().remove(postSet, String.valueOf(uid));
+                            operations.opsForSet().remove(userSet, String.valueOf(postId));
+                            operations.opsForValue().increment(flushKey, -1);
+                        }
+                        return null;
+                    }
+                });
+
+                threadPoolConfig.threadPoolExecutor().execute(() -> {
+                    try {
+                        if (targetCollect) {
+                            try { favoriteMapper.insert(uid, postId); } catch (Exception ignore) {}
+                        } else {
+                            try { favoriteMapper.delete(uid, postId); } catch (Exception ignore) {}
+                        }
+                        try {
+                            String flushKey = String.format(POST_FAV_FLUSH_KEY_FMT, postId);
+                            String val = stringRedisTemplate.opsForValue().get(flushKey);
+                            int pending = 0;
+                            if (StrUtil.isNotBlank(val)) {
+                                try { pending = Integer.parseInt(val); } catch (Exception ignore) {}
+                            }
+                            if (pending >= POST_FAV_FLUSH_THRESHOLD) {
+                                String lk = "lock:post:fav:flush:" + postId;
+                                var l = redissonClient.getLock(lk);
+                                boolean ok2 = false;
+                                try { ok2 = l.tryLock(5, 10, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+                                if (ok2) {
+                                    try {
+                                        String cur = stringRedisTemplate.opsForValue().get(flushKey);
+                                        int delta = 0;
+                                        if (StrUtil.isNotBlank(cur)) {
+                                            try { delta = Integer.parseInt(cur); } catch (Exception ignore) {}
+                                        }
+                                        if (delta != 0) {
+                                            postsMapper.incrCollectCount(postId, delta);
+                                            try {
+                                                java.util.Map<String, Object> params = new java.util.HashMap<>();
+                                                params.put("collectDelta", delta);
+                                                Script script = new Script(ScriptType.INLINE, "painless", "ctx._source.collectCount = (ctx._source.collectCount != null ? ctx._source.collectCount : 0) + params.collectDelta", params);
+                                                UpdateRequest ur = new UpdateRequest(INDEX_POSTS, String.valueOf(postId)).script(script);
+                                                esClient.update(ur, RequestOptions.DEFAULT);
+                                            } catch (Exception ignore) {}
+                                            try { stringRedisTemplate.opsForValue().decrement(flushKey, delta); } catch (Exception ignore) {}
+                                        }
+                                    } finally {
+                                        try { l.unlock(); } catch (Exception ignore) {}
+                                    }
+                                }
+                            }
+                        } catch (Exception ignore) {}
+                    } catch (Exception ignore) {}
+                });
+
+                Integer collectCountDb = 0;
+                try {
+                    var post = postsMapper.selectById(postId);
+                    if (post != null && post.getCollectCount() != null) collectCountDb = post.getCollectCount();
+                } catch (Exception ignore) {}
+                int pendingDelta = 0;
+                try {
+                    String fk = String.format(POST_FAV_FLUSH_KEY_FMT, postId);
+                    String v = stringRedisTemplate.opsForValue().get(fk);
+                    if (StrUtil.isNotBlank(v)) pendingDelta = Integer.parseInt(v);
+                } catch (Exception ignore) {}
+                boolean finalCollected = targetCollect;
+                int collectCount = collectCountDb + pendingDelta;
+                java.util.Map<String, Object> data = new java.util.HashMap<>();
+                data.put("isCollected", finalCollected);
+                data.put("collectCount", collectCount);
+                return Result.success(data);
+            } finally {
+                try { lock.unlock(); } catch (Exception ignore) {}
+            }
+        } catch (Exception e) {
+            return Result.error("服务器繁忙");
+        }
+    }
+
+    @Override
+    public Result getUserFavorites(Integer page, Integer size) {
+        try {
+            Long uid = com.tmd.tools.BaseContext.get();
+            if (uid == null || uid <= 0) return Result.error("未登录");
+            if (page == null || page < 1) page = 1;
+            if (size == null || size < 1) size = 20;
+            int offset = (page - 1) * size;
+            java.util.List<java.util.Map<String, Object>> list = favoriteMapper.selectByUser(uid, offset, size);
             return Result.success(list);
         } catch (Exception e) {
             return Result.error("服务器繁忙");

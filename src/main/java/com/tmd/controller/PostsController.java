@@ -115,6 +115,26 @@ public class PostsController {
         return postsService.getUserLikes(page, size, targetType);
     }
 
+    @PostMapping("/{postId}/favorite")
+    public Result toggleFavorite(@PathVariable Long postId,
+                                 @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
+        Long userId = BaseContext.get();
+        if (postId == null || postId <= 0) {
+            return Result.error("参数错误");
+        }
+        return postsService.toggleFavorite(postId);
+    }
+
+    @GetMapping("/favorites")
+    public Result getUserFavorites(@RequestParam(defaultValue = "1") Integer page,
+                                   @RequestParam(defaultValue = "20") Integer size) {
+        Long userId = BaseContext.get();
+        if (userId == null || userId <= 0) {
+            return Result.error("未登录");
+        }
+        return postsService.getUserFavorites(page, size);
+    }
+
     @GetMapping("/share/{token}")
     public Result openShare(@PathVariable String token) {
         return postsService.openShareLink(token);

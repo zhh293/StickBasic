@@ -29,4 +29,8 @@ public interface PostsService {
     Result toggleLike(Long postId);
 
     Result getUserLikes(Integer page, Integer size, String targetType);
+
+    Result toggleFavorite(Long postId);
+
+    Result getUserFavorites(Integer page, Integer size);
 }

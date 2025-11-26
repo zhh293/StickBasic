@@ -48,4 +48,7 @@ public interface PostsMapper {
 
     @Update("update posts set like_count = IFNULL(like_count,0) + #{delta} where id = #{id}")
     int incrLikeCount(@Param("id") Long id, @Param("delta") Integer delta);
+
+    @Update("update posts set collect_count = IFNULL(collect_count,0) + #{delta} where id = #{id}")
+    int incrCollectCount(@Param("id") Long id, @Param("delta") Integer delta);
 }
