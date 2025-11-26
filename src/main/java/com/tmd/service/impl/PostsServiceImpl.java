@@ -72,6 +72,13 @@ public class PostsServiceImpl implements PostsService {
     private static final int ZSET_PREFILL_LIMIT = 2000; // ZSet预热最大条数
     private static final String INDEX_POSTS = "posts";
     private static final String SHARE_TOKEN_KEY_FMT = "share:token:%s";
+    private static final String POST_VIEW_PV_KEY_FMT = "post:view:pv:%d";
+    private static final String POST_VIEW_UV_KEY_FMT = "post:view:uv:%d";
+    private static final String POST_VIEW_SEEN_KEY_FMT = "post:view:seen:%d:%d"; // postId:userId
+    private static final String POST_VIEW_DAILY_KEY_FMT = "post:view:daily:%s"; // yyyyMMdd
+    private static final long VIEW_DEDUPE_TTL_MINUTES = 5;
+    private static final String POST_VIEW_FLUSH_KEY_FMT = "post:view:flush:%d";
+    private static final int POST_VIEW_FLUSH_THRESHOLD = 50;
 
     @Override
     public Result getPosts(Integer page, Integer size, String type, String status, String sort)
@@ -234,6 +241,105 @@ public class PostsServiceImpl implements PostsService {
                     .total(0L)
                     .build();
             return Result.success(pageResult);
+        }
+    }
+
+    public Result recordView(Long postId) {
+        try {
+            if (postId == null || postId <= 0) return Result.error("参数错误");
+
+            // Bloom过滤器快速校验帖子是否存在（降低无效写）
+            try {
+                RBloomFilter<Long> postBloom = redissonClient.getBloomFilter("bf:post:id");
+                postBloom.tryInit(10_000_000L, 0.03);
+                if (!postBloom.contains(postId)) {
+                    // 允许旁路计数以免影响体验，但不做UV
+                     return Result.error("帖子不存在或已删除");
+                }
+            } catch (Exception ignore) {}
+
+            Long uid = com.tmd.tools.BaseContext.get();
+            boolean hasUser = uid != null && uid > 0;
+            boolean firstInWindow = false;
+            if (hasUser) {
+                String seenKey = String.format(POST_VIEW_SEEN_KEY_FMT, postId, uid);
+                try {
+                    firstInWindow = Boolean.TRUE.equals(
+                            stringRedisTemplate.opsForValue().setIfAbsent(seenKey, "1", VIEW_DEDUPE_TTL_MINUTES, java.util.concurrent.TimeUnit.MINUTES)
+                    );
+                } catch (Exception ignore) {}
+            }
+
+            final boolean doUv = hasUser && firstInWindow;
+
+            // 高QPS下减少RTT：使用pipeline合并PV、UV、热度增量、日统计
+            stringRedisTemplate.executePipelined(new org.springframework.data.redis.core.SessionCallback<Object>() {
+                @Override
+                public Object execute(org.springframework.data.redis.core.RedisOperations operations) {
+                    try {
+                        String pvKey = String.format(POST_VIEW_PV_KEY_FMT, postId);
+                        operations.opsForValue().increment(pvKey, 1);
+
+                        if (doUv) {
+                            String uvKey = String.format(POST_VIEW_UV_KEY_FMT, postId);
+                            operations.opsForHyperLogLog().add(uvKey, String.valueOf(uid));
+                        }
+
+                        // 不使用ZSet热度排序增量，简化为仅记录PV/UV与日统计
+
+                        String day = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
+                        String dayKey = String.format(POST_VIEW_DAILY_KEY_FMT, day);
+                        operations.opsForHash().increment(dayKey, String.valueOf(postId), 1L);
+                        operations.expire(dayKey, 7, java.util.concurrent.TimeUnit.DAYS);
+
+                        // 记录待落库增量（轻量批量刷盘）
+                        String flushKey = String.format(POST_VIEW_FLUSH_KEY_FMT, postId);
+                        operations.opsForValue().increment(flushKey, 1);
+                    } catch (Exception ignore) {}
+                    return null;
+                }
+            });
+
+            // 条件落库：达到阈值时把增量刷到 MySQL，避免每次写库
+            threadPoolConfig.threadPoolExecutor().execute(() -> {
+                try {
+                    try {
+                        String flushKey = String.format(POST_VIEW_FLUSH_KEY_FMT, postId);
+                        String val = stringRedisTemplate.opsForValue().get(flushKey);
+                        int pending = 0;
+                        if (StrUtil.isNotBlank(val)) {
+                            try { pending = Integer.parseInt(val); } catch (Exception ignore) {}
+                        }
+                        if (pending >= POST_VIEW_FLUSH_THRESHOLD) {
+                            String lockKey = "lock:post:view:flush:" + postId;
+                            var lock = redissonClient.getLock(lockKey);
+                            boolean ok = false;
+                            try {
+                                ok = lock.tryLock(5, 10, java.util.concurrent.TimeUnit.SECONDS);
+                            } catch (InterruptedException ignored) {}
+                            if (ok) {
+                                try {
+                                    String cur = stringRedisTemplate.opsForValue().get(flushKey);
+                                    int delta = 0;
+                                    if (StrUtil.isNotBlank(cur)) {
+                                        try { delta = Integer.parseInt(cur); } catch (Exception ignore) {}
+                                    }
+                                    if (delta > 0) {
+                                        postsMapper.incrViewCount(postId, delta);
+                                        // 重置累加器
+                                        try { stringRedisTemplate.opsForValue().decrement(flushKey, delta); } catch (Exception ignore) {}
+                                    }
+                                } finally {
+                                    try { lock.unlock(); } catch (Exception ignore) {}
+                                }
+                            }
+                        }
+                    } catch (Exception ignore) {}
+                });
+
+            return Result.success("记录成功");
+        } catch (Exception e) {
+            return Result.error("服务器繁忙");
         }
     }
 

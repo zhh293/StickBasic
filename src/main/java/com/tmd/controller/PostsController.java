@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.http.HttpHeaders;
 import static com.tmd.constants.common.ERROR_CODE;
 
 @RestController
@@ -81,6 +82,17 @@ public class PostsController {
             return Result.error("验证失败,非法访问");
         }
         return postsService.createShareLink(userId, postId, channel);
+    }
+
+    @PostMapping("/{postId}/view")
+    public Result recordView(@PathVariable Long postId,
+                             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
+        Long userId = BaseContext.get();
+        if (postId == null || postId <= 0) {
+            return Result.error("参数错误");
+        }
+        // 用户体验优先：快速返回，服务层负责高并发与缓存一致性
+        return postsService.recordView(postId);
     }
 
     @GetMapping("/share/{token}")

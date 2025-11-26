@@ -3,6 +3,7 @@ package com.tmd.mapper;
 import com.tmd.entity.dto.Post;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -41,4 +42,7 @@ public interface PostsMapper {
     List<Post> selectByIds(@Param("ids") List<Long> ids);
 
     int incrShareCount(@Param("id") Long id, @Param("delta") Integer delta);
+
+    @Update("update posts set view_count = IFNULL(view_count,0) + #{delta} where id = #{id}")
+    int incrViewCount(@Param("id") Long id, @Param("delta") Integer delta);
 }
