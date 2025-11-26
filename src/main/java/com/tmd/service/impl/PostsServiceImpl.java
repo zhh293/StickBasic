@@ -22,6 +22,9 @@ import org.springframework.stereotype.Service;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.delete.DeleteRequest;
 import org.elasticsearch.client.RequestOptions;
+import org.elasticsearch.action.update.UpdateRequest;
+import org.elasticsearch.script.Script;
+import org.elasticsearch.script.ScriptType;
 import org.elasticsearch.client.RestHighLevelClient;
 import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisCallback;
@@ -326,7 +329,13 @@ public class PostsServiceImpl implements PostsService {
                                     }
                                     if (delta > 0) {
                                         postsMapper.incrViewCount(postId, delta);
-                                        // 重置累加器
+                                        try {
+                                            java.util.Map<String, Object> params = new java.util.HashMap<>();
+                                            params.put("viewDelta", delta);
+                                            Script script = new Script(ScriptType.INLINE, "painless", "ctx._source.viewCount = (ctx._source.viewCount != null ? ctx._source.viewCount : 0) + params.viewDelta", params);
+                                            UpdateRequest ur = new UpdateRequest(INDEX_POSTS, String.valueOf(postId)).script(script);
+                                            esClient.update(ur, RequestOptions.DEFAULT);
+                                        } catch (Exception ignore) {}
                                         try { stringRedisTemplate.opsForValue().decrement(flushKey, delta); } catch (Exception ignore) {}
                                     }
                                 } finally {
