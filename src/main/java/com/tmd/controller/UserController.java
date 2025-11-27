@@ -253,9 +253,9 @@ public class UserController {
     }
 
     @PutMapping("/updatepw")
-    public Result updatepassword(@RequestBody Map<String, String> requestBody, @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization ){
+    public Result updatepassword(@RequestBody Map<String, String> requestBody ){
         log.info("用户正在尝试修改密码");
-        var uid = SimpleTools.checkToken(authorization);
+        var uid = BaseContext.get();
         if (uid != ERROR_CODE){
             log.info("用户{}正在尝试修改密码", uid);
             String oldPassword = requestBody.get("oldPw");

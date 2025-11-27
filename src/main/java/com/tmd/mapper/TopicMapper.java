@@ -19,7 +19,7 @@ public interface TopicMapper {
     List<Topic> getAllTopics();
 
     @Select("select c.id,c.name,c.description,c.cover_image,c.post_count,c.follower_count,c.status" +
-            ",u.username from sticknew.topic c left join sticknew.user u on u.id = c.user_id where c.id=#{topicId}")
+            ",u.username from sticknew.topic c left join sticknew.users u on u.id = c.user_id where c.id=#{topicId}")
     TopicVO getTopicById(Integer topicId);
 
     void insert(Topic topicEntity);
