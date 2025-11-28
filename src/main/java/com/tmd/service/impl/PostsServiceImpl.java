@@ -476,6 +476,10 @@ public class PostsServiceImpl implements PostsService {
                     } catch (Exception ignore) {}
                 });
 
+
+
+                //保证点击之后用户能看见立刻的变化，维护体验感
+                //写入数据库可以不用立刻，批量刷盘
                 Integer likeCountDb = 0;
                 try {
                     var post = postsMapper.selectById(postId);
@@ -488,6 +492,7 @@ public class PostsServiceImpl implements PostsService {
                     if (StrUtil.isNotBlank(v)) pendingDelta = Integer.parseInt(v);
                 } catch (Exception ignore) {}
                 boolean finalLiked = targetLike;
+                //数据库旧数据加上缓存中缓存的点赞的增量才是当前这个帖子的真正点赞数
                 int likeCount = likeCountDb + pendingDelta;
                 java.util.Map<String, Object> data = new java.util.HashMap<>();
                 data.put("isLiked", finalLiked);
