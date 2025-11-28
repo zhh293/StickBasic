@@ -178,6 +178,42 @@ src/main/java/com/tmd
   - AI 接入采用 Spring AI，可替换模型与兼容 API。
   - RabbitMQ 配置在工程中，业务可选用（当前关注实现未依赖消息中间件）。
 
+### Redis 高级用法（Posts 计数与交互）
+- 轻量滑窗去重（防刷）：在浏览计数中，用 `SETNX + EXPIRE` 做 5 分钟窗口去重，仅首次命中计入 UV。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:282-291`。
+- HyperLogLog UV 统计：在窗口命中时，用 `PFADD` 记录近似 UV，QPS 高、内存占用低。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:300-303`。
+- Pipeline 减 RTT：一次浏览合并 PV、UV、日统计增量到单次往返，降低网络开销。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:292-311`。
+- 日统计与过期：`HINCRBY post:view:daily:{yyyyMMdd} postId 1`，并设置 7 天 TTL，用于报表与趋势。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:307-311`。
+- 增量聚合刷盘（视图/点赞/收藏）：
+  - 采用增量累加键作为“待落库计数”，达到阈值后批量写库并重置累加器；用分布式锁保护并发刷盘。
+  - 键格式与阈值：`post:view:flush:{postId}`、`post:like:flush:{postId}`、`post:fav:flush:{postId}`；默认阈值 `50`。
+  - 视图增量：累加键写入位置 `src/main/java/com/tmd/service/impl/PostsServiceImpl.java:353-354`；刷盘与 ES 增量位置 `src/main/java/com/tmd/service/impl/PostsServiceImpl.java:324-331`。
+  - 点赞增量：刷盘与 ES 增量位置 `src/main/java/com/tmd/service/impl/PostsServiceImpl.java:455-470`。
+  - 收藏增量：刷盘与 ES 增量位置 `src/main/java/com/tmd/service/impl/PostsServiceImpl.java:606-641`。
+- ES 脚本增量更新：使用 painless 脚本对 `viewCount`/`likeCount`/`collectCount` 做增量相加，避免读取-写入竞争。代码示例：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:336-337`、`460-468`、`628-636`。
+- 集合维护（快速判断与列表）：
+  - 点赞集合：`post:like:users:{postId}` 与 `user:likes:set:{uid}`，在切换时 `SADD/SREM` 精确维护；位置 `src/main/java/com/tmd/service/impl/PostsServiceImpl.java:394-410`。
+  - 收藏集合：`post:fav:users:{postId}` 与 `user:favs:set:{uid}`，在切换时 `SADD/SREM` 精确维护；位置 `src/main/java/com/tmd/service/impl/PostsServiceImpl.java:525-541`。
+- 布隆过滤器（旁路无效写）：`bf:post:id` 过滤不存在的帖子 ID，降低无效写入的占比；位置 `src/main/java/com/tmd/service/impl/PostsServiceImpl.java:316-323`。
+
+ 键设计参考（部分）：
+- `post:view:pv:{postId}`、`post:view:uv:{postId}`、`post:view:seen:{postId}:{userId}`、`post:view:daily:{yyyyMMdd}`
+- `post:view:flush:{postId}`、`post:like:flush:{postId}`、`post:fav:flush:{postId}`
+- `post:like:users:{postId}`、`user:likes:set:{userId}`、`post:fav:users:{postId}`、`user:favs:set:{userId}`
+
+#### 获取帖子列表（getPosts）
+- 列表/总数缓存：键格式 `post:list:{type}:{status}:{sort}:{page}:{size}`、`post:total:{type}:{status}:{sort}`；TTL 分别为 `LIST_TTL_SECONDS=60`、`TOTAL_TTL_SECONDS=300`。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:74-78, 112-114, 201-205`。
+- 缓存未命中保护：使用分布式锁 `redisLock:{listKey}`，`tryLock(-1, 30s)` 后在线程池内异步恢复缓存，避免缓存击穿与惊群。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:135-149, 246-249`。
+- 批量附件查询映射：单页批量查询附件，映射为轻量附件列表，避免 N+1。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:145-155, 168-179`。
+- ZSet 分层缓存恢复：`post:zset:{sort}:{type}:{status}`；`latest` 用创建时间毫秒作为分值，`hot` 用浏览量作为分值。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:206-221`。
+- Bloom 过滤器维护：同步维护 `bf:post:id`、`bf:user:id`、`bf:topic:id`，降低无效访问。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:223-241`。
+
+#### 创建帖子（createPost）
+- 总数缓存自增：新帖创建后对 `post:total:{type}:{status}:{sort}` 的 `latest` 与 `hot` 计数尝试 `INCR`。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:748-752`。
+- 列表首屏失效与预热：失效 `latest` 第一页（支持 10/20 两种大小）并立即预热，批量补齐附件与作者/话题信息，写入 TTL。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:756-815`。
+- 话题维度缓存：失效并预热 `topic:post:list:{topicId}:{status}:latest:1:{size}`，并对 `topic:post:total:{topicId}:{status}:{sort}` 计数尝试自增。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:820-899, 886-896`。
+- Bloom 过滤器新增：将新帖 ID、作者 ID、话题 ID 加入布隆过滤器。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:902-916`。
+- 搜索索引更新：将新帖写入 ES 索引（含作者/话题元数据），便于搜索与排序。代码位置：`src/main/java/com/tmd/service/impl/PostsServiceImpl.java:918-950`。
+
 ## 常见问题（FAQ）
 - `application.yml` 的 `l2cache.*` 在 IDE 标黄：
   - 给 `L2CacheProperties` 加 `@Component`，并引入 `spring-boot-configuration-processor`；

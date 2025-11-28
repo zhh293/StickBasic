@@ -568,7 +568,8 @@ public class PostsServiceImpl implements PostsService {
                 threadPoolConfig.threadPoolExecutor().execute(() -> {
                     try {
                         if (targetCollect) {
-                            try { favoriteMapper.insert(uid, postId); } catch (Exception ignore) {}
+                            try { favoriteMapper.insert(uid, postId); } catch (Exception ignore) {
+                            }
                         } else {
                             try { favoriteMapper.delete(uid, postId); } catch (Exception ignore) {}
                         }
