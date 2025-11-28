@@ -260,25 +260,29 @@ public class TopicServiceImpl implements TopicService {
             TopicFollowVO topicFollowVO = TopicFollowVO.builder()
                     .isFollowed(false)
                     .followerCount(range.size() - 1)
+                    .topicId(topicId.longValue())
                     .build();
             stringRedisTemplate.opsForZSet().remove(key, BaseContext.get().toString());
+            Long l = BaseContext.get();
             // 把数据库中的改成false，数量减去一
             threadPoolConfig.threadPoolExecutor().execute(() -> {
                 topicMapper.updateFollowCount(topicFollowVO);
-                topicFollowMapper.deleteByTopicId(topicId);
+                topicFollowMapper.deleteByTopicId(topicId,l);
             });
             return Result.success(topicFollowVO);
         } else {
             TopicFollowVO topicFollowVO = TopicFollowVO.builder()
                     .isFollowed(true)
                     .followerCount(range.size() + 1)
+                    .topicId(topicId.longValue())
                     .build();
             stringRedisTemplate.opsForZSet().add(key, BaseContext.get().toString(), System.currentTimeMillis());
+            Long l = BaseContext.get();
             threadPoolConfig.threadPoolExecutor().execute(() -> {
                 topicMapper.updateFollowCount(topicFollowVO);
                 topicFollowMapper.insert(TopicFollow.builder()
                         .topicId(Long.valueOf(topicId))
-                        .userId(BaseContext.get())
+                        .userId(l)
                         .createdAt(LocalDateTime.now())
                         .build());
             });
