@@ -75,7 +75,10 @@ public class MailServiceImpl implements MailService {
         String s = stringRedisTemplate.opsForValue().get("mail:" + mailId);
         // 缓存中没有则查数据库
         if (StrUtil.isNotBlank(s)) {
-            try { meterRegistry.counter("mail.cache.hit").increment(); } catch (Exception ignored) {}
+            try {
+                meterRegistry.counter("mail.cache.hit").increment();
+            } catch (Exception ignored) {
+            }
             mail bean = JSONUtil.toBean(s, mail.class);
             MailVO mailVO = MailVO.builder()
                     .mailId(bean.getId())
@@ -92,11 +95,17 @@ public class MailServiceImpl implements MailService {
         // 数据库中查到则返回
         if (s != null) {
             // 说明是缓存穿透，直接返回
-            try { meterRegistry.counter("mail.cache.penetration").increment(); } catch (Exception ignored) {}
+            try {
+                meterRegistry.counter("mail.cache.penetration").increment();
+            } catch (Exception ignored) {
+            }
             return null;
         }
         // 查数据库
-        try { meterRegistry.counter("mail.cache.miss").increment(); } catch (Exception ignored) {}
+        try {
+            meterRegistry.counter("mail.cache.miss").increment();
+        } catch (Exception ignored) {
+        }
         mail mail = mailMapper.selectById(mailId);
         // 数据库中没查到则返回null，而且使用缓存穿透
         if (mail == null) {
@@ -104,7 +113,8 @@ public class MailServiceImpl implements MailService {
             return null;
         }
         // 存入redis
-        stringRedisTemplate.opsForValue().set("mail:" + mailId, JSONUtil.toJsonStr(mail), MAIL_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
+        stringRedisTemplate.opsForValue().set("mail:" + mailId, JSONUtil.toJsonStr(mail), MAIL_CACHE_TTL_MINUTES,
+                TimeUnit.MINUTES);
         MailVO mailVO = MailVO.builder()
                 .mailId(mail.getId())
                 .stampType(mail.getStampType())
@@ -132,14 +142,26 @@ public class MailServiceImpl implements MailService {
             RLock lock = redissonClient.getLock("lock:mails:all");
             try {
                 long t0 = System.nanoTime();
-                try { meterRegistry.counter("mail.lock.attempts").increment(); } catch (Exception ignored) {}
+                try {
+                    meterRegistry.counter("mail.lock.attempts").increment();
+                } catch (Exception ignored) {
+                }
                 boolean b = lock.tryLock(5, 30, TimeUnit.SECONDS);
                 long waitNs = System.nanoTime() - t0;
                 if (b) {
-                    try { meterRegistry.counter("mail.lock.success").increment(); } catch (Exception ignored) {}
-                    try { meterRegistry.timer("mail.lock.wait").record(waitNs, java.util.concurrent.TimeUnit.NANOSECONDS); } catch (Exception ignored) {}
+                    try {
+                        meterRegistry.counter("mail.lock.success").increment();
+                    } catch (Exception ignored) {
+                    }
+                    try {
+                        meterRegistry.timer("mail.lock.wait").record(waitNs, java.util.concurrent.TimeUnit.NANOSECONDS);
+                    } catch (Exception ignored) {
+                    }
                 } else {
-                    try { meterRegistry.counter("mail.lock.fail").increment(); } catch (Exception ignored) {}
+                    try {
+                        meterRegistry.counter("mail.lock.fail").increment();
+                    } catch (Exception ignored) {
+                    }
                 }
                 if (b) {
                     threadPoolConfig.threadPoolExecutor().execute(() -> {
@@ -245,7 +267,8 @@ public class MailServiceImpl implements MailService {
         mailMapper.insert(mail);
         stringRedisTemplate.opsForZSet().add("mails:all", mail.getId().toString(),
                 System.currentTimeMillis());
-        stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail), MAIL_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
+        stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail), MAIL_CACHE_TTL_MINUTES,
+                TimeUnit.MINUTES);
     }
 
     @Override
@@ -264,7 +287,8 @@ public class MailServiceImpl implements MailService {
                     return Result.error("原始邮件不存在或已删除");
                 }
                 // 将数据库中的邮件缓存到redis中
-                stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail), MAIL_CACHE_TTL_MINUTES,
+                stringRedisTemplate.opsForValue().set("mail:" + mail.getId(), JSONUtil.toJsonStr(mail),
+                        MAIL_CACHE_TTL_MINUTES,
                         TimeUnit.MINUTES);
             } else {
                 mail = JSONUtil.toBean(s, mail.class);
@@ -529,7 +553,8 @@ public class MailServiceImpl implements MailService {
         StringBuilder ctx = new StringBuilder();
         if (Boolean.TRUE.equals(scheduled)) {
 
-            ctx.append("[原始邮件]\n").append(origin.getSenderNickname()).append(": ").append(origin.getContent()).append("\n");
+            ctx.append("[原始邮件]\n").append(origin.getSenderNickname()).append(": ").append(origin.getContent())
+                    .append("\n");
             PageHelper.startPage(1, 5);
             Page<ReceivedMail> page = receivedMailMapper.selectByUserId(uid);
             if (page != null && page.getResult() != null) {
@@ -542,32 +567,34 @@ public class MailServiceImpl implements MailService {
                     ctx.append("[来信]\n").append(r.getSenderNickname()).append(": ").append(r.getContent()).append("\n");
                 }
             }
-        java.util.List<String> selfComments = stringRedisTemplate.opsForList().range("mail:comment:" + uid, 0, 10);
-        if (selfComments != null) {
-            int added = 0;
-            for (String sc : selfComments) {
-                MailComment mc = JSONUtil.toBean(sc, MailComment.class);
-                if (mc != null && mailId.equals(mc.getMailId())) {
-                    ctx.append("[我的评论]\\n").append(mc.getContent()).append("\\n");
-                    added++;
-                    if (added >= 2) break;
+            java.util.List<String> selfComments = stringRedisTemplate.opsForList().range("mail:comment:" + uid, 0, 10);
+            if (selfComments != null) {
+                int added = 0;
+                for (String sc : selfComments) {
+                    MailComment mc = JSONUtil.toBean(sc, MailComment.class);
+                    if (mc != null && mailId.equals(mc.getMailId())) {
+                        ctx.append("[我的评论]\\n").append(mc.getContent()).append("\\n");
+                        added++;
+                        if (added >= 2)
+                            break;
+                    }
                 }
             }
         }
+        threadPoolConfig.threadPoolExecutor().execute(() -> {
+            try {
+                String insights = aiService.extractMailInsights(ctx.toString());
+                Map<String, Object> normalized = normalizeInsights(insights);
+                String json = JSONUtil.toJsonStr(normalized);
+                stringRedisTemplate.opsForValue().set(key, json, INSIGHT_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
+            } catch (Exception ignored) {
+            } finally {
+                stringRedisTemplate.delete(genKey);
             }
-            threadPoolConfig.threadPoolExecutor().execute(() -> {
-                try {
-                    String insights = aiService.extractMailInsights(ctx.toString());
-                    Map<String, Object> normalized = normalizeInsights(insights);
-                    String json = JSONUtil.toJsonStr(normalized);
-                    stringRedisTemplate.opsForValue().set(key, json, INSIGHT_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
-                } catch (Exception ignored) {}
-                finally {
-                    stringRedisTemplate.delete(genKey);
-                }
-            });
+        });
         return Result.success(Collections.singletonMap("processing", true));
-        }
+    }
+
     @Override
     public Result agentSuggest(Long mailId, Integer count, String style) {
         int c = count == null || count < 1 ? 3 : Math.min(count, 5);
@@ -578,12 +605,14 @@ public class MailServiceImpl implements MailService {
         Long uid = BaseContext.get();
         StringBuilder ctx = new StringBuilder();
         ctx.append("[原始邮件]\n").append(origin.getSenderNickname()).append(": ").append(origin.getContent()).append("\n");
-        Set<String> set = stringRedisTemplate.opsForZSet().rangeByScore("mail:push:" + uid, 0, System.currentTimeMillis(), 0, 5);
+        Set<String> set = stringRedisTemplate.opsForZSet().rangeByScore("mail:push:" + uid, 0,
+                System.currentTimeMillis(), 0, 5);
         if (set != null) {
             for (String s : set) {
                 ReceivedMail rm = JSONUtil.toBean(s, ReceivedMail.class);
                 if (rm != null && mailId.equals(rm.getOriginalMailId())) {
-                    ctx.append("[来信]\n").append(rm.getSenderNickname()).append(": ").append(rm.getContent()).append("\n");
+                    ctx.append("[来信]\n").append(rm.getSenderNickname()).append(": ").append(rm.getContent())
+                            .append("\n");
                 }
             }
         }
@@ -628,5 +657,4 @@ public class MailServiceImpl implements MailService {
         }
         return result;
     }
-    }
-
+}

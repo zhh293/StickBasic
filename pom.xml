@@ -31,6 +31,16 @@
     </properties>
   <dependencies>
     <!-- For YAML autocompletion and metadata for custom @ConfigurationProperties -->
+      <dependency>
+          <groupId>com.google.zxing</groupId>
+          <artifactId>core</artifactId>
+          <version>3.5.1</version>
+      </dependency>
+      <dependency>
+          <groupId>com.google.zxing</groupId>
+          <artifactId>javase</artifactId>
+          <version>3.5.1</version>
+  </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-configuration-processor</artifactId>
@@ -193,6 +203,27 @@
       <dependency>
           <groupId>org.aspectj</groupId>
           <artifactId>aspectjrt</artifactId>
+      </dependency>
+      <!-- Spring Retry 核心依赖 -->
+      <dependency>
+          <groupId>org.springframework.retry</groupId>
+          <artifactId>spring-retry</artifactId>
+      </dependency>
+      <!-- Spring Aspects (AOP 依赖，Retry注解需要) -->
+      <dependency>
+          <groupId>org.springframework</groupId>
+          <artifactId>spring-aspects</artifactId>
+      </dependency>
+      <!-- Resilience4j 重试（可选，增强稳定性） -->
+      <dependency>
+          <groupId>io.github.resilience4j</groupId>
+          <artifactId>resilience4j-retry</artifactId>
+          <version>2.1.0</version>
+      </dependency>
+      <dependency>
+          <groupId>io.github.resilience4j</groupId>
+          <artifactId>resilience4j-spring-boot3</artifactId>
+          <version>2.1.0</version>
       </dependency>
         <dependency>
             <groupId>org.apache.httpcomponents</groupId>

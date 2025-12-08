@@ -72,7 +72,7 @@
                 ORDER BY created_at DESC
             </otherwise>
         </choose>
-        LIMIT #{offset}, #{size}
+        `LIMIT` #{offset}, #{size}
     </select>
 
     <select id="count" resultType="long">
@@ -120,7 +120,7 @@
                 ORDER BY created_at DESC
             </otherwise>
         </choose>
-        LIMIT #{offset}, #{size}
+        `LIMIT` #{offset}, #{size}
     </select>
 
     <select id="countByTopic" resultType="long">
@@ -148,7 +148,7 @@
             </if>
         </where>
         ORDER BY created_at DESC
-        LIMIT #{limit}
+        `LIMIT` #{limit}
     </select>
 
     <!-- 根据一批 id 查询详细字段，用于从 ZSet 拿到 id 后回填详情 -->

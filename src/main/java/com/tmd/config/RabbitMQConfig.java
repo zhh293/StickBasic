@@ -47,7 +47,6 @@ public class RabbitMQConfig {
     public static final String DEAD_LETTER_ROUTING_KEY = "dead.letter.routing.key";
     public static final String NORMAL_QUEUE = "normal.queue"; // 会产生死信的普通队列
 
-
     // 1. Direct交换机配置
     @Bean
     public DirectExchange directExchange() {
@@ -93,7 +92,6 @@ public class RabbitMQConfig {
                 .with(DIRECT_ROUTING_KEY_2);
     }
 
-
     // 2. Topic交换机配置
     @Bean
     public TopicExchange topicExchange() {
@@ -131,7 +129,6 @@ public class RabbitMQConfig {
                 .with(TOPIC_ROUTING_KEY_ORDER);
     }
 
-
     // 3. Fanout交换机配置
     @Bean
     public FanoutExchange fanoutExchange() {
@@ -165,7 +162,6 @@ public class RabbitMQConfig {
         return BindingBuilder.bind(fanoutQueue2)
                 .to(fanoutExchange);
     }
-
 
     // 4. 死信队列配置
     @Bean
@@ -222,9 +218,9 @@ public class RabbitMQConfig {
                 "766045749@qq.com",
                 true,
                 true,
-                false
-        );
+                false);
     }
+
     @Bean
     public Jackson2JsonMessageConverter messageConverter() {
         ObjectMapper objectMapper = new ObjectMapper();

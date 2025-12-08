@@ -20,6 +20,7 @@ import org.redisson.api.RBloomFilter;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.delete.DeleteRequest;
@@ -74,7 +75,7 @@ public class PostsServiceImpl implements PostsService {
     private static final String POSTS_LIST_KEY_FMT = "post:list:%s:%s:%s:%d:%d"; // type:status:sort:page:size
     private static final String POSTS_TOTAL_KEY_FMT = "post:total:%s:%s:%s"; // type:status:sort
     private static final String POSTS_ZSET_KEY_FMT = "post:zset:%s:%s:%s"; // sort:type:status
-    private static final long LIST_TTL_SECONDS = 60; // 列表缓存TTL
+    private static final long LIST_TTL_SECONDS = 200; // 列表缓存TTL
     private static final long TOTAL_TTL_SECONDS = 300; // 总数缓存TTL
     private static final int ZSET_PREFILL_LIMIT = 2000; // ZSet预热最大条数
     private static final String INDEX_POSTS = "posts";
@@ -96,6 +97,26 @@ public class PostsServiceImpl implements PostsService {
     private static final String USER_FAVS_SET_FMT = "user:favs:set:%d";
     private static final String POST_FAV_FLUSH_KEY_FMT = "post:fav:flush:%d";
     private static final int POST_FAV_FLUSH_THRESHOLD = 50;
+
+    /**
+     * 缓存帖子列表到Redis，带有重试机制
+     */
+    @Retryable(value = { org.springframework.data.redis.RedisConnectionFailureException.class }, // 仅重试Redis连接异常
+            maxAttempts = 3, // 最大重试次数
+            backoff = @org.springframework.retry.annotation.Backoff(delay = 1000, // 初始延迟1秒
+                    multiplier = 2, // 指数倍增长
+                    maxDelay = 5000 // 最大延迟5秒
+            ))
+    private void cachePostsList(String sort, String typeKey, String statusKey, List<PostListItemVO> items,
+            String type, String status, String listKey, String totalKey) {
+        log.info("开始缓存帖子列表: sort={}, type={}, status={}", sort, typeKey, statusKey);
+        String json = JSONUtil.toJsonStr(items);
+        stringRedisTemplate.opsForValue().set(listKey, json, LIST_TTL_SECONDS, TimeUnit.SECONDS);
+        long total = postsMapper.count(type, status);
+        stringRedisTemplate.opsForValue().set(totalKey, String.valueOf(total), TOTAL_TTL_SECONDS, TimeUnit.SECONDS);
+        log.info("帖子列表缓存成功: sort={}, type={}, status={}, listKey={}, totalKey={}", sort, typeKey, statusKey, listKey,
+                totalKey);
+    }
 
     @Override
     public Result getPosts(Integer page, Integer size, String type, String status, String sort)
@@ -197,12 +218,13 @@ public class PostsServiceImpl implements PostsService {
                             items.add(vo);
                         }
 
-                        String json = JSONUtil.toJsonStr(items);
-                        stringRedisTemplate.opsForValue().set(listKey, json, LIST_TTL_SECONDS, TimeUnit.SECONDS);
-                        long total = postsMapper.count(type, status);
-                        stringRedisTemplate.opsForValue().set(totalKey, String.valueOf(total), TOTAL_TTL_SECONDS,
-                                TimeUnit.SECONDS);
-
+                        try {
+                            cachePostsList(finalSort, typeKey, statusKey, items, type, status, listKey, totalKey);
+                        } catch (Exception e) {
+                            log.error("Cache posts list failed after all retries: sort={}, type={}, status={}",
+                                    finalSort, typeKey,
+                                    statusKey, e);
+                        }
                         // ZSet 分层缓存恢复
                         try {
                             String zsetKeyLatest = String.format(POSTS_ZSET_KEY_FMT, finalSort, typeKey, statusKey);
@@ -263,7 +285,8 @@ public class PostsServiceImpl implements PostsService {
 
     public Result recordView(Long postId) {
         try {
-            if (postId == null || postId <= 0) return Result.error("参数错误");
+            if (postId == null || postId <= 0)
+                return Result.error("参数错误");
 
             // Bloom过滤器快速校验帖子是否存在（降低无效写）
             try {
@@ -271,9 +294,10 @@ public class PostsServiceImpl implements PostsService {
                 postBloom.tryInit(10_000_000L, 0.03);
                 if (!postBloom.contains(postId)) {
                     // 允许旁路计数以免影响体验，但不做UV
-                     return Result.error("帖子不存在或已删除");
+                    return Result.error("帖子不存在或已删除");
                 }
-            } catch (Exception ignore) {}
+            } catch (Exception ignore) {
+            }
 
             Long uid = com.tmd.tools.BaseContext.get();
             boolean hasUser = uid != null && uid > 0;
@@ -282,15 +306,17 @@ public class PostsServiceImpl implements PostsService {
                 String seenKey = String.format(POST_VIEW_SEEN_KEY_FMT, postId, uid);
                 try {
                     firstInWindow = Boolean.TRUE.equals(
-                            stringRedisTemplate.opsForValue().setIfAbsent(seenKey, "1", VIEW_DEDUPE_TTL_MINUTES, java.util.concurrent.TimeUnit.MINUTES)
-                    );
-                } catch (Exception ignore) {}
+                            stringRedisTemplate.opsForValue().setIfAbsent(seenKey, "1", VIEW_DEDUPE_TTL_MINUTES,
+                                    java.util.concurrent.TimeUnit.MINUTES));
+                } catch (Exception ignore) {
+                }
             }
 
             final boolean doUv = hasUser && firstInWindow;
 
             // 高QPS下减少RTT：使用pipeline合并PV、UV、热度增量、日统计
             stringRedisTemplate.executePipelined(new org.springframework.data.redis.core.SessionCallback<Object>() {
+                @SuppressWarnings("unchecked")
                 @Override
                 public Object execute(org.springframework.data.redis.core.RedisOperations operations) {
                     try {
@@ -304,7 +330,8 @@ public class PostsServiceImpl implements PostsService {
 
                         // 不使用ZSet热度排序增量，简化为仅记录PV/UV与日统计
 
-                        String day = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
+                        String day = java.time.LocalDate.now()
+                                .format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
                         String dayKey = String.format(POST_VIEW_DAILY_KEY_FMT, day);
                         operations.opsForHash().increment(dayKey, String.valueOf(postId), 1L);
                         operations.expire(dayKey, 7, java.util.concurrent.TimeUnit.DAYS);
@@ -312,7 +339,8 @@ public class PostsServiceImpl implements PostsService {
                         // 记录待落库增量（轻量批量刷盘）
                         String flushKey = String.format(POST_VIEW_FLUSH_KEY_FMT, postId);
                         operations.opsForValue().increment(flushKey, 1);
-                    } catch (Exception ignore) {}
+                    } catch (Exception ignore) {
+                    }
                     return null;
                 }
             });
@@ -353,8 +381,11 @@ public class PostsServiceImpl implements PostsService {
                                         try {
                                             java.util.Map<String, Object> params = new java.util.HashMap<>();
                                             params.put("viewDelta", delta);
-                                            Script script = new Script(ScriptType.INLINE, "painless", "ctx._source.viewCount = (ctx._source.viewCount != null ? ctx._source.viewCount : 0) + params.viewDelta", params);
-                                            UpdateRequest ur = new UpdateRequest(INDEX_POSTS, String.valueOf(postId)).script(script);
+                                            Script script = new Script(ScriptType.INLINE, "painless",
+                                                    "ctx._source.viewCount = (ctx._source.viewCount != null ? ctx._source.viewCount : 0) + params.viewDelta",
+                                                    params);
+                                            UpdateRequest ur = new UpdateRequest(INDEX_POSTS, String.valueOf(postId))
+                                                    .script(script);
                                             esClient.update(ur, RequestOptions.DEFAULT);
                                         } catch (Exception ignore) {
                                         }
@@ -372,7 +403,6 @@ public class PostsServiceImpl implements PostsService {
                             }
                         }
 
-
                     } catch (Exception ignore) {
                     }
                 } catch (Exception e) {
@@ -389,14 +419,20 @@ public class PostsServiceImpl implements PostsService {
     public Result toggleLike(Long postId) {
         try {
             Long uid = com.tmd.tools.BaseContext.get();
-            if (uid == null || uid <= 0) return Result.error("未登录");
-            if (postId == null || postId <= 0) return Result.error("参数错误");
+            if (uid == null || uid <= 0)
+                return Result.error("未登录");
+            if (postId == null || postId <= 0)
+                return Result.error("参数错误");
 
             String lockKey = "lock:post:like:" + postId + ":" + uid;
             var lock = redissonClient.getLock(lockKey);
             boolean ok = false;
-            try { ok = lock.tryLock(3, 5, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-            if (!ok) return Result.error("频繁操作");
+            try {
+                ok = lock.tryLock(3, 5, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+            if (!ok)
+                return Result.error("频繁操作");
             try {
                 String postSetKey = String.format(POST_LIKE_USERS_SET_FMT, postId);
                 Boolean mem = stringRedisTemplate.opsForSet().isMember(postSetKey, String.valueOf(uid));
@@ -404,13 +440,15 @@ public class PostsServiceImpl implements PostsService {
                 if (mem == null || !mem) {
                     int c = likesMapper.exists(uid, "post", postId);
                     liked = c > 0;
-                    if (liked) stringRedisTemplate.opsForSet().add(postSetKey, String.valueOf(uid));
+                    if (liked)
+                        stringRedisTemplate.opsForSet().add(postSetKey, String.valueOf(uid));
                 } else {
                     liked = true;
                 }
 
                 final boolean targetLike = !liked;
                 stringRedisTemplate.executePipelined(new org.springframework.data.redis.core.SessionCallback<Object>() {
+                    @SuppressWarnings("unchecked")
                     @Override
                     public Object execute(org.springframework.data.redis.core.RedisOperations operations) {
                         String postSet = String.format(POST_LIKE_USERS_SET_FMT, postId);
@@ -432,9 +470,15 @@ public class PostsServiceImpl implements PostsService {
                 threadPoolConfig.threadPoolExecutor().execute(() -> {
                     try {
                         if (targetLike) {
-                            try { likesMapper.insert(uid, "post", postId); } catch (Exception ignore) {}
+                            try {
+                                likesMapper.insert(uid, "post", postId);
+                            } catch (Exception ignore) {
+                            }
                         } else {
-                            try { likesMapper.delete(uid, "post", postId); } catch (Exception ignore) {}
+                            try {
+                                likesMapper.delete(uid, "post", postId);
+                            } catch (Exception ignore) {
+                            }
                         }
                         // 列表缓存不做双删，依赖集合的精确 SADD/SREM 与读路径按需重建
                         try {
@@ -442,64 +486,90 @@ public class PostsServiceImpl implements PostsService {
                             String val = stringRedisTemplate.opsForValue().get(flushKey);
                             int pending = 0;
                             if (StrUtil.isNotBlank(val)) {
-                                try { pending = Integer.parseInt(val); } catch (Exception ignore) {}
+                                try {
+                                    pending = Integer.parseInt(val);
+                                } catch (Exception ignore) {
+                                }
                             }
                             if (pending >= POST_LIKE_FLUSH_THRESHOLD) {
                                 String lk = "lock:post:like:flush:" + postId;
                                 var l = redissonClient.getLock(lk);
                                 boolean ok2 = false;
-                                try { ok2 = l.tryLock(5, 10, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+                                try {
+                                    ok2 = l.tryLock(5, 10, java.util.concurrent.TimeUnit.SECONDS);
+                                } catch (InterruptedException ignored) {
+                                }
                                 if (ok2) {
                                     try {
                                         String cur = stringRedisTemplate.opsForValue().get(flushKey);
                                         int delta = 0;
                                         if (StrUtil.isNotBlank(cur)) {
-                                            try { delta = Integer.parseInt(cur); } catch (Exception ignore) {}
+                                            try {
+                                                delta = Integer.parseInt(cur);
+                                            } catch (Exception ignore) {
+                                            }
                                         }
                                         if (delta != 0) {
                                             postsMapper.incrLikeCount(postId, delta);
                                             try {
                                                 java.util.Map<String, Object> params = new java.util.HashMap<>();
                                                 params.put("likeDelta", delta);
-                                                Script script = new Script(ScriptType.INLINE, "painless", "ctx._source.likeCount = (ctx._source.likeCount != null ? ctx._source.likeCount : 0) + params.likeDelta", params);
-                                                UpdateRequest ur = new UpdateRequest(INDEX_POSTS, String.valueOf(postId)).script(script);
+                                                Script script = new Script(ScriptType.INLINE, "painless",
+                                                        "ctx._source.likeCount = (ctx._source.likeCount != null ? ctx._source.likeCount : 0) + params.likeDelta",
+                                                        params);
+                                                UpdateRequest ur = new UpdateRequest(INDEX_POSTS,
+                                                        String.valueOf(postId)).script(script);
                                                 esClient.update(ur, RequestOptions.DEFAULT);
-                                            } catch (Exception ignore) {}
-                                            try { stringRedisTemplate.opsForValue().decrement(flushKey, delta); } catch (Exception ignore) {}
+                                            } catch (Exception ignore) {
+                                            }
+                                            try {
+                                                stringRedisTemplate.opsForValue().decrement(flushKey, delta);
+                                            } catch (Exception ignore) {
+                                            }
                                         }
                                     } finally {
-                                        try { l.unlock(); } catch (Exception ignore) {}
+                                        try {
+                                            l.unlock();
+                                        } catch (Exception ignore) {
+                                        }
                                     }
                                 }
                             }
-                        } catch (Exception ignore) {}
-                    } catch (Exception ignore) {}
+                        } catch (Exception ignore) {
+                        }
+                    } catch (Exception ignore) {
+                    }
                 });
 
-
-
-                //保证点击之后用户能看见立刻的变化，维护体验感
-                //写入数据库可以不用立刻，批量刷盘
+                // 保证点击之后用户能看见立刻的变化，维护体验感
+                // 写入数据库可以不用立刻，批量刷盘
                 Integer likeCountDb = 0;
                 try {
                     var post = postsMapper.selectById(postId);
-                    if (post != null && post.getLikeCount() != null) likeCountDb = post.getLikeCount();
-                } catch (Exception ignore) {}
+                    if (post != null && post.getLikeCount() != null)
+                        likeCountDb = post.getLikeCount();
+                } catch (Exception ignore) {
+                }
                 int pendingDelta = 0;
                 try {
                     String fk = String.format(POST_LIKE_FLUSH_KEY_FMT, postId);
                     String v = stringRedisTemplate.opsForValue().get(fk);
-                    if (StrUtil.isNotBlank(v)) pendingDelta = Integer.parseInt(v);
-                } catch (Exception ignore) {}
+                    if (StrUtil.isNotBlank(v))
+                        pendingDelta = Integer.parseInt(v);
+                } catch (Exception ignore) {
+                }
                 boolean finalLiked = targetLike;
-                //数据库旧数据加上缓存中缓存的点赞的增量才是当前这个帖子的真正点赞数
+                // 数据库旧数据加上缓存中缓存的点赞的增量才是当前这个帖子的真正点赞数
                 int likeCount = likeCountDb + pendingDelta;
                 java.util.Map<String, Object> data = new java.util.HashMap<>();
                 data.put("isLiked", finalLiked);
                 data.put("likeCount", likeCount);
                 return Result.success(data);
             } finally {
-                try { lock.unlock(); } catch (Exception ignore) {}
+                try {
+                    lock.unlock();
+                } catch (Exception ignore) {
+                }
             }
         } catch (Exception e) {
             return Result.error("服务器繁忙");
@@ -510,11 +580,15 @@ public class PostsServiceImpl implements PostsService {
     public Result getUserLikes(Integer page, Integer size, String targetType) {
         try {
             Long uid = com.tmd.tools.BaseContext.get();
-            if (uid == null || uid <= 0) return Result.error("未登录");
-            if (page == null || page < 1) page = 1;
-            if (size == null || size < 1) size = 20;
+            if (uid == null || uid <= 0)
+                return Result.error("未登录");
+            if (page == null || page < 1)
+                page = 1;
+            if (size == null || size < 1)
+                size = 20;
             int offset = (page - 1) * size;
-            java.util.List<java.util.Map<String, Object>> list = likesMapper.selectByUser(uid, targetType, offset, size);
+            java.util.List<java.util.Map<String, Object>> list = likesMapper.selectByUser(uid, targetType, offset,
+                    size);
             return Result.success(list);
         } catch (Exception e) {
             return Result.error("服务器繁忙");
@@ -525,14 +599,20 @@ public class PostsServiceImpl implements PostsService {
     public Result toggleFavorite(Long postId) {
         try {
             Long uid = com.tmd.tools.BaseContext.get();
-            if (uid == null || uid <= 0) return Result.error("未登录");
-            if (postId == null || postId <= 0) return Result.error("参数错误");
+            if (uid == null || uid <= 0)
+                return Result.error("未登录");
+            if (postId == null || postId <= 0)
+                return Result.error("参数错误");
 
             String lockKey = "lock:post:fav:" + postId + ":" + uid;
             var lock = redissonClient.getLock(lockKey);
             boolean ok = false;
-            try { ok = lock.tryLock(3, 5, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-            if (!ok) return Result.error("频繁操作");
+            try {
+                ok = lock.tryLock(3, 5, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+            if (!ok)
+                return Result.error("频繁操作");
             try {
                 String postSetKey = String.format(POST_FAV_USERS_SET_FMT, postId);
                 Boolean mem = stringRedisTemplate.opsForSet().isMember(postSetKey, String.valueOf(uid));
@@ -540,13 +620,15 @@ public class PostsServiceImpl implements PostsService {
                 if (mem == null || !mem) {
                     int c = favoriteMapper.exists(uid, postId);
                     collected = c > 0;
-                    if (collected) stringRedisTemplate.opsForSet().add(postSetKey, String.valueOf(uid));
+                    if (collected)
+                        stringRedisTemplate.opsForSet().add(postSetKey, String.valueOf(uid));
                 } else {
                     collected = true;
                 }
 
                 final boolean targetCollect = !collected;
                 stringRedisTemplate.executePipelined(new org.springframework.data.redis.core.SessionCallback<Object>() {
+                    @SuppressWarnings("unchecked")
                     @Override
                     public Object execute(org.springframework.data.redis.core.RedisOperations operations) {
                         String postSet = String.format(POST_FAV_USERS_SET_FMT, postId);
@@ -568,61 +650,91 @@ public class PostsServiceImpl implements PostsService {
                 threadPoolConfig.threadPoolExecutor().execute(() -> {
                     try {
                         if (targetCollect) {
-                            try { favoriteMapper.insert(uid, postId); } catch (Exception ignore) {
+                            try {
+                                favoriteMapper.insert(uid, postId);
+                            } catch (Exception ignore) {
                             }
                         } else {
-                            try { favoriteMapper.delete(uid, postId); } catch (Exception ignore) {}
+                            try {
+                                favoriteMapper.delete(uid, postId);
+                            } catch (Exception ignore) {
+                            }
                         }
                         try {
                             String flushKey = String.format(POST_FAV_FLUSH_KEY_FMT, postId);
                             String val = stringRedisTemplate.opsForValue().get(flushKey);
                             int pending = 0;
                             if (StrUtil.isNotBlank(val)) {
-                                try { pending = Integer.parseInt(val); } catch (Exception ignore) {}
+                                try {
+                                    pending = Integer.parseInt(val);
+                                } catch (Exception ignore) {
+                                }
                             }
                             if (pending >= POST_FAV_FLUSH_THRESHOLD) {
                                 String lk = "lock:post:fav:flush:" + postId;
                                 var l = redissonClient.getLock(lk);
                                 boolean ok2 = false;
-                                try { ok2 = l.tryLock(5, 10, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+                                try {
+                                    ok2 = l.tryLock(5, 10, java.util.concurrent.TimeUnit.SECONDS);
+                                } catch (InterruptedException ignored) {
+                                }
                                 if (ok2) {
                                     try {
                                         String cur = stringRedisTemplate.opsForValue().get(flushKey);
                                         int delta = 0;
                                         if (StrUtil.isNotBlank(cur)) {
-                                            try { delta = Integer.parseInt(cur); } catch (Exception ignore) {}
+                                            try {
+                                                delta = Integer.parseInt(cur);
+                                            } catch (Exception ignore) {
+                                            }
                                         }
                                         if (delta != 0) {
                                             postsMapper.incrCollectCount(postId, delta);
                                             try {
                                                 java.util.Map<String, Object> params = new java.util.HashMap<>();
                                                 params.put("collectDelta", delta);
-                                                Script script = new Script(ScriptType.INLINE, "painless", "ctx._source.collectCount = (ctx._source.collectCount != null ? ctx._source.collectCount : 0) + params.collectDelta", params);
-                                                UpdateRequest ur = new UpdateRequest(INDEX_POSTS, String.valueOf(postId)).script(script);
+                                                Script script = new Script(ScriptType.INLINE, "painless",
+                                                        "ctx._source.collectCount = (ctx._source.collectCount != null ? ctx._source.collectCount : 0) + params.collectDelta",
+                                                        params);
+                                                UpdateRequest ur = new UpdateRequest(INDEX_POSTS,
+                                                        String.valueOf(postId)).script(script);
                                                 esClient.update(ur, RequestOptions.DEFAULT);
-                                            } catch (Exception ignore) {}
-                                            try { stringRedisTemplate.opsForValue().decrement(flushKey, delta); } catch (Exception ignore) {}
+                                            } catch (Exception ignore) {
+                                            }
+                                            try {
+                                                stringRedisTemplate.opsForValue().decrement(flushKey, delta);
+                                            } catch (Exception ignore) {
+                                            }
                                         }
                                     } finally {
-                                        try { l.unlock(); } catch (Exception ignore) {}
+                                        try {
+                                            l.unlock();
+                                        } catch (Exception ignore) {
+                                        }
                                     }
                                 }
                             }
-                        } catch (Exception ignore) {}
-                    } catch (Exception ignore) {}
+                        } catch (Exception ignore) {
+                        }
+                    } catch (Exception ignore) {
+                    }
                 });
 
                 Integer collectCountDb = 0;
                 try {
                     var post = postsMapper.selectById(postId);
-                    if (post != null && post.getCollectCount() != null) collectCountDb = post.getCollectCount();
-                } catch (Exception ignore) {}
+                    if (post != null && post.getCollectCount() != null)
+                        collectCountDb = post.getCollectCount();
+                } catch (Exception ignore) {
+                }
                 int pendingDelta = 0;
                 try {
                     String fk = String.format(POST_FAV_FLUSH_KEY_FMT, postId);
                     String v = stringRedisTemplate.opsForValue().get(fk);
-                    if (StrUtil.isNotBlank(v)) pendingDelta = Integer.parseInt(v);
-                } catch (Exception ignore) {}
+                    if (StrUtil.isNotBlank(v))
+                        pendingDelta = Integer.parseInt(v);
+                } catch (Exception ignore) {
+                }
                 boolean finalCollected = targetCollect;
                 int collectCount = collectCountDb + pendingDelta;
                 java.util.Map<String, Object> data = new java.util.HashMap<>();
@@ -630,7 +742,10 @@ public class PostsServiceImpl implements PostsService {
                 data.put("collectCount", collectCount);
                 return Result.success(data);
             } finally {
-                try { lock.unlock(); } catch (Exception ignore) {}
+                try {
+                    lock.unlock();
+                } catch (Exception ignore) {
+                }
             }
         } catch (Exception e) {
             return Result.error("服务器繁忙");
@@ -641,9 +756,12 @@ public class PostsServiceImpl implements PostsService {
     public Result getUserFavorites(Integer page, Integer size) {
         try {
             Long uid = com.tmd.tools.BaseContext.get();
-            if (uid == null || uid <= 0) return Result.error("未登录");
-            if (page == null || page < 1) page = 1;
-            if (size == null || size < 1) size = 20;
+            if (uid == null || uid <= 0)
+                return Result.error("未登录");
+            if (page == null || page < 1)
+                page = 1;
+            if (size == null || size < 1)
+                size = 20;
             int offset = (page - 1) * size;
             java.util.List<java.util.Map<String, Object>> list = favoriteMapper.selectByUser(uid, offset, size);
             return Result.success(list);
@@ -1278,7 +1396,10 @@ public class PostsServiceImpl implements PostsService {
             stringRedisTemplate.expire(key, 7, java.util.concurrent.TimeUnit.DAYS);
 
             threadPoolConfig.threadPoolExecutor().execute(() -> {
-                try { postsMapper.incrShareCount(postId, 1); } catch (Exception ignored) {}
+                try {
+                    postsMapper.incrShareCount(postId, 1);
+                } catch (Exception ignored) {
+                }
             });
 
             java.util.Map<String, String> resp = new java.util.HashMap<>();
@@ -1305,9 +1426,11 @@ public class PostsServiceImpl implements PostsService {
             }
             java.util.List<Attachment> attachments = attachmentService.getAttachmentsByBusiness("post", postId);
             java.util.List<AttachmentLite> liteAttachments = new java.util.ArrayList<>();
-            if (attachments != null) for (Attachment a : attachments) {
-                liteAttachments.add(AttachmentLite.builder().fileUrl(a.getFileUrl()).fileType(a.getFileType()).fileName(a.getFileName()).build());
-            }
+            if (attachments != null)
+                for (Attachment a : attachments) {
+                    liteAttachments.add(AttachmentLite.builder().fileUrl(a.getFileUrl()).fileType(a.getFileType())
+                            .fileName(a.getFileName()).build());
+                }
             UserProfile profile = userService.getProfile(post.getUserId());
             String username = profile != null ? profile.getUsername() : null;
             String avatar = profile != null ? profile.getAvatar() : null;
