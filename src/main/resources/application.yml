@@ -119,6 +119,7 @@ call:
     cleanup-interval-ms: 60000
   connection:
     cleanup-interval-ms: 30000
+#配置nacos
 
 #wechat:
 #  pay:

@@ -1,0 +1,11 @@
+#spring:
+#  application:
+#    name: BasicBack  # 应用名称
+#  cloud:
+#    nacos:
+#      discovery:
+#        server-addr: localhost:8848  # Nacos 服务地址
+#      config:
+#        server-addr: localhost:8848
+#        group: DEFAULT_GROUP
+#        file-extension: yaml
