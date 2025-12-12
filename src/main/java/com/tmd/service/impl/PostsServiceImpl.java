@@ -42,6 +42,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Service
 @Slf4j
@@ -112,9 +113,10 @@ public class PostsServiceImpl implements PostsService {
             String type, String status, String listKey, String totalKey) {
         log.info("开始缓存帖子列表: sort={}, type={}, status={}", sort, typeKey, statusKey);
         String json = JSONUtil.toJsonStr(items);
-        stringRedisTemplate.opsForValue().set(listKey, json, LIST_TTL_SECONDS, TimeUnit.SECONDS);
+        stringRedisTemplate.opsForValue().set(listKey, json, ttlJitter(LIST_TTL_SECONDS), TimeUnit.SECONDS);
         long total = postsMapper.count(type, status);
-        stringRedisTemplate.opsForValue().set(totalKey, String.valueOf(total), TOTAL_TTL_SECONDS, TimeUnit.SECONDS);
+        stringRedisTemplate.opsForValue().set(totalKey, String.valueOf(total), ttlJitter(TOTAL_TTL_SECONDS),
+                TimeUnit.SECONDS);
         log.info("帖子列表缓存成功: sort={}, type={}, status={}, listKey={}, totalKey={}", sort, typeKey, statusKey, listKey,
                 totalKey);
     }
@@ -220,7 +222,7 @@ public class PostsServiceImpl implements PostsService {
                         }
 
                         try {
-                            //获取本类的代理对象
+                            // 获取本类的代理对象
                             PostsServiceImpl proxy = (PostsServiceImpl) AopContext.currentProxy();
                             proxy.cachePostsList(finalSort, typeKey, statusKey, items, type, status, listKey, totalKey);
                         } catch (Exception e) {
@@ -284,6 +286,12 @@ public class PostsServiceImpl implements PostsService {
                     .build();
             return Result.success(pageResult);
         }
+    }
+
+    private long ttlJitter(long baseSeconds) {
+        long maxExtra = Math.max(1, baseSeconds / 5);
+        long extra = ThreadLocalRandom.current().nextLong(0, maxExtra + 1);
+        return baseSeconds + extra;
     }
 
     public Result recordView(Long postId) {
@@ -864,7 +872,8 @@ public class PostsServiceImpl implements PostsService {
 
                 // 不使用 ZSet：改为直接更新/失效传统分页缓存
 
-                // 计数缓存：尝试 +1（如果存在）
+                // 计数缓存：尝试 +1（如果存在），帖子总数+1(这里根据类型分别缓存了多个组的帖子数量)
+                // 我准备来个ttl抖动防止缓存雪崩
                 try {
                     String totalLatestKey = String.format(POSTS_TOTAL_KEY_FMT, typeKey, statusKey, "latest");
                     String totalHotKey = String.format(POSTS_TOTAL_KEY_FMT, typeKey, statusKey, "hot");
@@ -879,7 +888,6 @@ public class PostsServiceImpl implements PostsService {
                     int[] sizes = new int[] { 10, 20 };
                     for (int s : sizes) {
                         String listLatest = String.format(POSTS_LIST_KEY_FMT, typeKey, statusKey, "latest", 1, s);
-                        stringRedisTemplate.delete(listLatest);
 
                         // 预热 latest 的第一页，避免下次读触发锁和冷启动
                         List<Post> firstPage = postsMapper.selectPage(dto.getType(), dto.getStatus(), "latest", 0, s);
@@ -932,7 +940,8 @@ public class PostsServiceImpl implements PostsService {
                             items.add(vo);
                         }
                         String json = JSONUtil.toJsonStr(items);
-                        stringRedisTemplate.opsForValue().set(listLatest, json, LIST_TTL_SECONDS, TimeUnit.SECONDS);
+                        stringRedisTemplate.opsForValue().set(listLatest, json, ttlJitter(LIST_TTL_SECONDS),
+                                TimeUnit.SECONDS);
                     }
                 } catch (Exception e) {
                     log.warn("Create list cache warm failed: id={}", post.getId(), e);
@@ -946,7 +955,6 @@ public class PostsServiceImpl implements PostsService {
                         for (int s : sizesT) {
                             String topicListLatest = String.format("topic:post:list:%d:%s:%s:%d:%d", topicId, statusKey,
                                     "latest", 1, s);
-                            stringRedisTemplate.delete(topicListLatest);
 
                             List<Post> firstPageByTopic = postsMapper.selectPageByTopic(topicId, dto.getStatus(),
                                     "latest", 0, s);
@@ -1000,7 +1008,7 @@ public class PostsServiceImpl implements PostsService {
                                 itemsT.add(vo);
                             }
                             String jsonT = JSONUtil.toJsonStr(itemsT);
-                            stringRedisTemplate.opsForValue().set(topicListLatest, jsonT, LIST_TTL_SECONDS,
+                            stringRedisTemplate.opsForValue().set(topicListLatest, jsonT, ttlJitter(LIST_TTL_SECONDS),
                                     TimeUnit.SECONDS);
                         }
 
