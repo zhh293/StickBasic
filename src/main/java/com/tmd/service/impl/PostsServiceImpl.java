@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBloomFilter;
 import org.redisson.api.RedissonClient;
+import org.springframework.aop.framework.AopContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.retry.annotation.Retryable;
@@ -107,7 +108,7 @@ public class PostsServiceImpl implements PostsService {
                     multiplier = 2, // 指数倍增长
                     maxDelay = 5000 // 最大延迟5秒
             ))
-    private void cachePostsList(String sort, String typeKey, String statusKey, List<PostListItemVO> items,
+    public void cachePostsList(String sort, String typeKey, String statusKey, List<PostListItemVO> items,
             String type, String status, String listKey, String totalKey) {
         log.info("开始缓存帖子列表: sort={}, type={}, status={}", sort, typeKey, statusKey);
         String json = JSONUtil.toJsonStr(items);
@@ -219,7 +220,9 @@ public class PostsServiceImpl implements PostsService {
                         }
 
                         try {
-                            cachePostsList(finalSort, typeKey, statusKey, items, type, status, listKey, totalKey);
+                            //获取本类的代理对象
+                            PostsServiceImpl proxy = (PostsServiceImpl) AopContext.currentProxy();
+                            proxy.cachePostsList(finalSort, typeKey, statusKey, items, type, status, listKey, totalKey);
                         } catch (Exception e) {
                             log.error("Cache posts list failed after all retries: sort={}, type={}, status={}",
                                     finalSort, typeKey,
