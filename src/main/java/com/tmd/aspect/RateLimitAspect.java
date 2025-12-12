@@ -27,34 +27,36 @@ public class RateLimitAspect {
         LUA_TOKEN_BUCKET.setResultType(Long.class);
         LUA_TOKEN_BUCKET.setScriptText(
                 "local rate=tonumber(ARGV[1]);" +
-                "local last=tonumber(redis.call('get', KEYS[2]) or ARGV[2]);" +
-                "local now=tonumber(ARGV[3]);" +
-                "local capacity=tonumber(ARGV[4]);" +
-                "local tokens=tonumber(redis.call('get', KEYS[1]) or capacity);" +
-                "local delta=math.floor((now-last)/1000*rate);" +
-                "if delta>0 then tokens=math.min(capacity,tokens+delta); last=now; end;" +
-                "local allowed=0;" +
-                "if tokens>0 then tokens=tokens-1; allowed=1; end;" +
-                "redis.call('set', KEYS[1], tokens);" +
-                "redis.call('set', KEYS[2], last);" +
-                "redis.call('expire', KEYS[1], tonumber(ARGV[5]));" +
-                "redis.call('expire', KEYS[2], tonumber(ARGV[5]));" +
-                "return allowed;"
-        );
+                        "local last=tonumber(redis.call('get', KEYS[2]) or ARGV[2]);" +
+                        "local now=tonumber(ARGV[3]);" +
+                        "local capacity=tonumber(ARGV[4]);" +
+                        "local tokens=tonumber(redis.call('get', KEYS[1]) or capacity);" +
+                        "local delta=math.floor((now-last)/1000*rate);" +
+                        "if delta>0 then tokens=math.min(capacity,tokens+delta); last=now; end;" +
+                        "local allowed=0;" +
+                        "if tokens>0 then tokens=tokens-1; allowed=1; end;" +
+                        "redis.call('set', KEYS[1], tokens);" +
+                        "redis.call('set', KEYS[2], last);" +
+                        "redis.call('expire', KEYS[1], tonumber(ARGV[5]));" +
+                        "redis.call('expire', KEYS[2], tonumber(ARGV[5]));" +
+                        "return allowed;");
     }
 
-    @Around("execution(* com.tmd.controller.PostsController.*(..))")
+    @Around("@annotation(com.tmd.aspect.RateLimit)")
     public Object limit(ProceedingJoinPoint pjp) throws Throwable {
         MethodSignature ms = (MethodSignature) pjp.getSignature();
         Method m = ms.getMethod();
         RateLimit cfg = m.getAnnotation(RateLimit.class);
-        int threshold = cfg != null ? cfg.threshold() : 50;
-        int window = cfg != null ? cfg.windowSeconds() : 1;
-        boolean byUser = cfg != null ? cfg.byUser() : true;
-        String custom = cfg != null ? cfg.key() : "";
-        boolean useTokenBucket = cfg != null && cfg.tokenBucket();
-        int capacity = cfg != null ? cfg.capacity() : threshold;
-        int refillPerSecond = cfg != null ? cfg.refillPerSecond() : threshold;
+        if (cfg == null) {
+            return pjp.proceed();
+        }
+        int threshold = cfg.threshold();
+        int window = cfg.windowSeconds();
+        boolean byUser = cfg.byUser();
+        String custom = cfg.key();
+        boolean useTokenBucket = cfg.tokenBucket();
+        int capacity = cfg.capacity();
+        int refillPerSecond = cfg.refillPerSecond();
         String base = custom != null && !custom.isEmpty() ? custom : m.getName();
         String key = "rate:post:" + base;
         if (byUser) {
@@ -82,7 +84,8 @@ public class RateLimitAspect {
                 if (v != null && v == 1L) {
                     stringRedisTemplate.expire(key, window, TimeUnit.SECONDS);
                 }
-            } catch (Exception ignore) {}
+            } catch (Exception ignore) {
+            }
             if (v != null && v > threshold) {
                 return Result.error("请求过于频繁");
             }
