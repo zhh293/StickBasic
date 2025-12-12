@@ -1,5 +1,5 @@
-package com.tmd.WebSocket;
 
+package com.tmd.WebSocket;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.util.concurrent.RateLimiter;
 import com.tmd.entity.dto.call.CallAction;
@@ -78,6 +78,8 @@ public class CallWebSocketServer {
     @OnClose
     public void onClose(@PathParam("userId") Long userId) {
         CONNECTIONS.remove(userId);
+        RATE_LIMITERS.remove(userId); // 新增：清理用户限流器
+        log.info("呼叫WebSocket关闭 userId={}", userId);
         log.info("呼叫WebSocket关闭 userId={}", userId);
     }
 
