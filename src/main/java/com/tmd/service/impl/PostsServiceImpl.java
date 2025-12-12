@@ -81,6 +81,10 @@ public class PostsServiceImpl implements PostsService {
     private static final long TOTAL_TTL_SECONDS = 300; // 总数缓存TTL
     private static final int ZSET_PREFILL_LIMIT = 2000; // ZSet预热最大条数
     private static final String INDEX_POSTS = "posts";
+    private static final int RATE_LIMIT_LIST_THRESHOLD = 50;
+    private static final int RATE_LIMIT_LIST_WINDOW_SECONDS = 1;
+    private static final int RATE_LIMIT_CREATE_THRESHOLD = 5;
+    private static final int RATE_LIMIT_CREATE_WINDOW_SECONDS = 1;
     private static final String SHARE_TOKEN_KEY_FMT = "share:token:%s";
     private static final String POST_VIEW_PV_KEY_FMT = "post:view:pv:%d";
     private static final String POST_VIEW_UV_KEY_FMT = "post:view:uv:%d";
@@ -783,6 +787,17 @@ public class PostsServiceImpl implements PostsService {
 
     @Override
     public Result createPost(Long userId, PostCreateDTO dto) {
+        String rk = "rate:post:create:" + userId;
+        Long rcv = null;
+        try {
+            rcv = stringRedisTemplate.opsForValue().increment(rk, 1);
+            if (rcv != null && rcv == 1L) {
+                stringRedisTemplate.expire(rk, RATE_LIMIT_CREATE_WINDOW_SECONDS, TimeUnit.SECONDS);
+            }
+        } catch (Exception ignore) {}
+        if (rcv != null && rcv > RATE_LIMIT_CREATE_THRESHOLD) {
+            return Result.error("请求过于频繁");
+        }
         if (userId == null || userId <= 0) {
             return Result.error("验证失败,非法访问");
         }
