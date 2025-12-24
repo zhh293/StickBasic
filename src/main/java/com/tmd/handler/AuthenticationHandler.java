@@ -1,12 +1,10 @@
 package com.tmd.handler;
 
 import com.alibaba.fastjson.JSON;
-
 import com.tmd.entity.dto.Result;
 import com.tmd.tools.WebUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.apache.lucene.util.fst.Util;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.web.AuthenticationEntryPoint;

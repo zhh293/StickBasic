@@ -2,8 +2,6 @@ package com.tmd.config;
 
 import com.tmd.entity.dto.AliOssUtil;
 import com.tmd.properties.AliOssProperties;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.QuestionAnswerAdvisor;
@@ -12,11 +10,16 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.InMemoryChatMemory;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiEmbeddingModel;
+import org.springframework.ai.openai.OpenAiImageModel;
+import org.springframework.ai.openai.api.OpenAiImageApi;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
+import org.springframework.web.client.RestClient;
 
 import static com.tmd.constants.SystemConstants.*;
 
@@ -59,6 +62,14 @@ public class CommonConfiguration {
                                 .build();
         }
 
+        @Bean
+        public OpenAiImageModel openAiImageModelCustom(@Value("${spring.ai.openai.api-key}") String apiKey, @Value("${spring.ai.openai.base-url}") String baseUrl) {
+                //设置超时时间为5分钟
+                int timeOut = 5*60*1000;
+                HttpComponentsClientHttpRequestFactory clientHttpRequestFactory = new HttpComponentsClientHttpRequestFactory();
+                clientHttpRequestFactory.setReadTimeout(timeOut);
+                return new OpenAiImageModel(new OpenAiImageApi(baseUrl, apiKey, RestClient.builder().requestFactory(clientHttpRequestFactory)));
+        }
         @Bean("convertClient")
         public ChatClient convertClient(OpenAiChatModel model, ChatMemory chatMemory) {
                 return ChatClient

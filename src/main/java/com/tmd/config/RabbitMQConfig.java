@@ -2,7 +2,6 @@ package com.tmd.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-
 import com.tmd.properties.MailProperties;
 import com.tmd.tools.MailUtil;
 import org.springframework.amqp.core.*;
@@ -224,6 +223,7 @@ public class RabbitMQConfig {
     @Bean
     public Jackson2JsonMessageConverter messageConverter() {
         ObjectMapper objectMapper = new ObjectMapper();
+        objectMapper.enableDefaultTyping(ObjectMapper.DefaultTyping.NON_FINAL);
         // 注册 JavaTime 模块，支持 LocalDateTime 等 Java 8 时间类型
         objectMapper.registerModule(new JavaTimeModule());
         return new Jackson2JsonMessageConverter(objectMapper);

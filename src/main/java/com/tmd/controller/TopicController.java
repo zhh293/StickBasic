@@ -15,7 +15,7 @@ public class TopicController {
     private TopicService topicService;
 
     @GetMapping
-    public Result getAllTopics(@RequestParam(defaultValue = "1") Integer page, @RequestParam(defaultValue = "10") Integer size,@RequestParam String status) throws InterruptedException {
+    public Result getAllTopics(@RequestParam(defaultValue = "1") Integer page, @RequestParam(defaultValue = "10") Integer size,@RequestParam(defaultValue = "approved") String status) throws InterruptedException {
         return topicService.getAllTopics(page, size,status);
     }
 

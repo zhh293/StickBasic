@@ -1,21 +1,15 @@
 package com.tmd.service.impl;
 
 import cn.hutool.json.JSONUtil;
-import groovy.util.logging.Slf4j;
-
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import com.tmd.config.ThreadPoolConfig;
 import com.tmd.entity.dto.*;
-import com.tmd.mapper.AttachmentMapper;
-import com.tmd.mapper.PostsMapper;
-import com.tmd.mapper.TopicFollowMapper;
-import com.tmd.mapper.TopicMapper;
-import com.tmd.mapper.UserMapper;
-import com.tmd.service.TopicService;
-import com.tmd.tools.BaseContext;
+import com.tmd.mapper.*;
 import com.tmd.publisher.MessageProducer;
 import com.tmd.publisher.TopicModerationMessage;
+import com.tmd.service.TopicService;
+import com.tmd.tools.BaseContext;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.ai.chat.client.ChatClient;

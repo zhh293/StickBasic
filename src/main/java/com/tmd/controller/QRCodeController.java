@@ -1,9 +1,7 @@
 package com.tmd.controller;
 
 import com.tmd.entity.QRCodeStatus;
-import com.tmd.entity.UserInfo;
 import com.tmd.entity.dto.UserProfile;
-import com.tmd.entity.po.UserData;
 import com.tmd.service.QRCodeService;
 import com.tmd.service.UserService;
 import com.tmd.tools.BaseContext;

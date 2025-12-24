@@ -2,7 +2,6 @@ package com.tmd.publisher;
 
 import com.tmd.config.RabbitMQConfig;
 import com.tmd.entity.dto.UserContent;
-import com.tmd.publisher.TopicModerationMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.connection.CorrelationData;

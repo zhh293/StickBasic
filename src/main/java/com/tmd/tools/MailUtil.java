@@ -35,7 +35,7 @@ public class MailUtil { // 注意：类名和Hutool的MailUtil重名，建议改
 
         // 调用Hutool的静态MailUtil发送（注意：如果自定义类名和Hutool重名，这里要写全类名）
         // 参数 false 表示不是HTML格式
-        cn.hutool.extra.mail.MailUtil.send(mailAccount, to, subject, content, false, file);
+        cn.hutool.extra.mail.MailUtil.send(mailAccount, to, subject, content, false);
     }
 
     /**
@@ -57,7 +57,8 @@ public class MailUtil { // 注意：类名和Hutool的MailUtil重名，建议改
         mailAccount.setDebug(debug);
         mailAccount.setSslEnable(sslEnabled);
 
+
         // 调用Hutool的静态MailUtil发送，参数 true 表示内容是HTML格式
-        cn.hutool.extra.mail.MailUtil.send(mailAccount, to, subject, htmlContent, true, file);
+        cn.hutool.extra.mail.MailUtil.send(mailAccount, to, subject, htmlContent, true);
     }
 }

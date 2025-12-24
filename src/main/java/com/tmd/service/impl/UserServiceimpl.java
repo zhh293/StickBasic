@@ -2,9 +2,7 @@ package com.tmd.service.impl;
 
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
-import com.alibaba.fastjson.JSONObject;
 import com.tmd.config.RedisCache;
-import com.tmd.entity.dto.Result;
 import com.tmd.entity.dto.UserProfile;
 import com.tmd.entity.dto.UserUpdateDTO;
 import com.tmd.entity.po.LoginUser;
@@ -28,7 +26,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 

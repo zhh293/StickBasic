@@ -1,18 +1,16 @@
 package com.tmd.consumer;
 
+import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson2.JSONObject;
 import com.rabbitmq.client.Channel;
-
-import cn.hutool.core.util.StrUtil;
-
 import com.tmd.WebSocket.WebSocketServer;
 import com.tmd.config.RabbitMQConfig;
 import com.tmd.entity.dto.AliOssUtil;
 import com.tmd.entity.dto.MailDTO;
+import com.tmd.mapper.TopicMapper;
 import com.tmd.publisher.MessageDTO;
 import com.tmd.publisher.TopicModerationMessage;
 import com.tmd.service.AttachmentService;
-import com.tmd.mapper.TopicMapper;
 import com.tmd.tools.MailUtil;
 import com.volcengine.ark.runtime.model.images.generation.GenerateImagesRequest;
 import com.volcengine.ark.runtime.model.images.generation.ImagesResponse;
@@ -24,15 +22,15 @@ import okhttp3.Dispatcher;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.utils.URIBuilder;
-import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.ai.openai.OpenAiImageModel;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -41,10 +39,7 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URISyntaxException;
 import java.net.URL;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 @Component
@@ -73,6 +68,9 @@ public class MessageConsumer {
     @Autowired
     @Qualifier("moderationClient")
     private ChatClient moderationClient;
+
+    @Autowired
+    private OpenAiImageModel openAiImageModel;
 
     /**
      * 从URL下载图片内容
@@ -103,7 +101,7 @@ public class MessageConsumer {
         return null;
     }
 
-    @RabbitListener(queues = RabbitMQConfig.DIRECT_QUEUE_1)
+    @RabbitListener(queues = RabbitMQConfig.DIRECT_QUEUE_1,ackMode = "MANUAL")
     public void consumeDirectQueue1(MessageDTO message, Channel channel, Message amqpMessage) throws IOException {
         try {
             log.info("【Direct队列1】收到消息: {}", message);
@@ -132,13 +130,16 @@ public class MessageConsumer {
                     promptBuilder.append("\n请访问以上图片URL并审核图片内容。");
                 }
                 String fullPrompt = promptBuilder.toString().trim();
+                log.info("话题审核提示: {}", fullPrompt);
                 int result = 1;
                 try {
                     if (!fullPrompt.isEmpty()) {
+                        log.info("开始审核话题: topicId={}", topicId);
                         String response = moderationClient.prompt()
                                 .user(fullPrompt)
                                 .call()
                                 .content();
+                        log.info("话题审核结果: {}", response);
                         result = parseModerationResult(response);
                     }
                 } catch (Exception e) {
@@ -157,6 +158,8 @@ public class MessageConsumer {
                         log.error("撤回话题失败: topicId={}", topicId, e);
                     }
                 }
+                // ⭐ 添加这行：即使审核不通过，也要确认消息
+                channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
                 return;
             }
 
@@ -216,24 +219,24 @@ public class MessageConsumer {
                         return;
                     }
 
-                    // 生成文件ID（objectKey），使用与CommonController一致的格式
+                    /*// 生成文件ID（objectKey），使用与CommonController一致的格式
                     String dateDir = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy/MM/dd"));
                     String uuid = UUID.randomUUID().toString().replace("-", "");
                     String fileId = String.format("image/%s/%s.jpg", dateDir, uuid);
 
                     // 上传到OSS
                     String ossUrl = aliOssUtil.upload(imageBytes, fileId);
-                    log.info("书签图片上传成功: userId={}, fileId={}, ossUrl={}", userId, fileId, ossUrl);
+                    log.info("书签图片上传成功: userId={}, fileId={}, ossUrl={}", userId, fileId, ossUrl);*/
 
                     //因为更新太频繁了，所以不存数据库了，直接存到redis里面
-                    stringRedisTemplate.opsForValue().set("bookmark:" + userId, ossUrl);
+                    /*stringRedisTemplate.opsForValue().set("bookmark:" + userId, ossUrl);
                     
                     log.info("书签URL: userId={}, bookmarkUrl={}", userId, ossUrl);
 
                     // 发送WebSocket通知用户书签已生成
                     if (webSocketServer != null && webSocketServer.Open(String.valueOf(userId))) {
                         webSocketServer.sendToUser(String.valueOf(userId), "书签已生成: " + ossUrl);
-                    }
+                    }*/
 
                 } catch (Exception e) {
                     log.error("为用户生成书签失败: userId={}", userId, e);
@@ -258,7 +261,7 @@ public class MessageConsumer {
                 .baseUrl("https://ark.cn-beijing.volces.com/api/v3") // The base URL for model invocation .
                 .dispatcher(dispatcher)
                 .connectionPool(connectionPool)
-                .apiKey(apiKey)
+                .apiKey("89b3eab2-288e-4872-8bb2-fbee9cebe399")
                 .build();
         //提示词要根据天气和时间生成
         //需要一个天气模型调用
@@ -287,6 +290,7 @@ public class MessageConsumer {
                 .watermark(true)
                 .build();
         ImagesResponse imagesResponse = service.generateImages(generateRequest);
+        log.info("生成图片成功: {}", imagesResponse);
         return imagesResponse.getData().get(0).getUrl();
     }
 
@@ -322,7 +326,7 @@ public class MessageConsumer {
         }
     }
 
-    @RabbitListener(queues = RabbitMQConfig.DIRECT_QUEUE_2)
+    @RabbitListener(queues = RabbitMQConfig.DIRECT_QUEUE_2, ackMode = "MANUAL")
     public void consumeDirectQueue2(MessageDTO message, Channel channel, Message amqpMessage) throws IOException {
         try {
             log.info("【Direct队列2】收到消息: {}", message);
@@ -339,6 +343,8 @@ public class MessageConsumer {
                 mailUtil.sendHtmlMail(mailDTO.getRecipientEmail(), subject, htmlContent, null);
                 log.info("邮件已成功发送到: {}", mailDTO.getRecipientEmail());
             }
+            channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
+
 
 //            channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
         } catch (Exception e) {

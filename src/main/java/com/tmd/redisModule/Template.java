@@ -1,19 +1,5 @@
 package com.tmd.redisModule;
 
-import cn.hutool.core.util.StrUtil;
-import cn.hutool.json.JSONUtil;
-import com.tmd.config.ThreadPoolConfig;
-import com.tmd.entity.dto.StickVO;
-import com.tmd.entity.po.UserData;
-import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RedissonClient;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.stereotype.Component;
-
-import java.util.List;
-import java.util.concurrent.TimeUnit;
-
 /*@Component
 @Slf4j
 public class Template {

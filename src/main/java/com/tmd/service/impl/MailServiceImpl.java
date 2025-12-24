@@ -10,32 +10,23 @@ import com.tmd.mapper.MailCommentMapper;
 import com.tmd.mapper.MailMapper;
 import com.tmd.mapper.ReceivedMailMapper;
 import com.tmd.publisher.MessageProducer;
-import org.springframework.data.redis.core.ZSetOperations;
-import java.util.HashSet;
+import com.tmd.service.AiService;
 import com.tmd.service.MailService;
 import com.tmd.tools.BaseContext;
 import com.tmd.tools.RedisIdWorker;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
-import org.elasticsearch.search.Scroll;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.stereotype.Service;
-import io.micrometer.core.instrument.MeterRegistry;
-import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.RedisOperations;
-import com.tmd.service.AiService;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.Collections;
+import org.springframework.data.redis.core.SessionCallback;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -178,8 +169,7 @@ public class MailServiceImpl implements MailService {
                             if (!addTuples.isEmpty()) {
                                 stringRedisTemplate.opsForZSet().add(key, addTuples);
                             }
-                        } finally {
-                            lock.unlock();
+                        } catch (Exception ignored){
                         }
                     });
                 }
@@ -187,14 +177,18 @@ public class MailServiceImpl implements MailService {
                         .data(new ArrayList<>()).build();
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
-            } /*
-               * finally {
-               * if (lock.isHeldByCurrentThread()) {
-               * lock.unlock();
-               * }
-               * }
-               */
-        }
+            }finally {
+                if (lock.isHeldByCurrentThread()) {
+                    lock.unlock();
+                }
+                /*
+                 * finally {
+                 * if (lock.isHeldByCurrentThread()) {
+                 * lock.unlock();
+                 * }
+                 * }
+                 */
+            }        }
 
         List<Long> ids = new ArrayList<>(tuples.size());
         long minTime = mailPackage.getMax();
@@ -253,6 +247,7 @@ public class MailServiceImpl implements MailService {
             messageProducer.sendMailMessage(mailDTO);
             return;
         }
+        mailDTO.setRecipientEmail("软件内人员");
         mail mail = com.tmd.entity.dto.mail.builder()
                 .senderId(BaseContext.get())
                 .senderNickname(mailDTO.getSenderNickname())
@@ -298,18 +293,18 @@ public class MailServiceImpl implements MailService {
                     .mailId(Long.valueOf(mailId))
                     .commenterId(BaseContext.get())
                     .content(mailDTO.getContent())
-                    .createAt(LocalDateTime.now())
+                    .createdAt(LocalDateTime.now())
                     .build();
             long l = redisIdWorker.nextId("mailreceive");
             ReceivedMail receivedMail = ReceivedMail.builder()
                     .id(l)
-                    .createAt(LocalDateTime.now())
+                    .createdAt(LocalDateTime.now())
                     .originalMailId(Long.valueOf(mailId))
                     .recipientId(senderId)
                     .senderId(BaseContext.get())
                     .senderNickname(mailDTO.getSenderNickname())
                     .content(mailDTO.getContent())
-                    .status(mailStatus.sent)
+                    .status("read")
                     .stampType(mailDTO.getStampType())
                     .readAt(null)
                     .build();
@@ -336,11 +331,11 @@ public class MailServiceImpl implements MailService {
             ReceivedMail receivedMail = receivedMailMapper.selectByMailId(mailId);
             ReceivedMail readyToAdd = ReceivedMail.builder()
                     .id(redisIdWorker.nextId("mailreceive"))
-                    .createAt(LocalDateTime.now())
+                    .createdAt(LocalDateTime.now())
                     .originalMailId(receivedMail.getOriginalMailId())
                     .content(mailDTO.getContent())
                     .stampType(mailDTO.getStampType())
-                    .status(mailStatus.sent)
+                    .status("read")
                     .senderNickname(mailDTO.getSenderNickname())
                     .recipientId(receivedMail.getSenderId())
                     .senderId(BaseContext.get())
@@ -353,7 +348,7 @@ public class MailServiceImpl implements MailService {
                     .mailId(receivedMail.getOriginalMailId())
                     .commenterId(BaseContext.get())
                     .content(mailDTO.getContent())
-                    .createAt(LocalDateTime.now())
+                    .createdAt(LocalDateTime.now())
                     .build();
             stringRedisTemplate.opsForList().leftPush("mail:comment:" + BaseContext.get(),
                     JSONUtil.toJsonStr(mailComment));
@@ -385,7 +380,7 @@ public class MailServiceImpl implements MailService {
                         .senderNickname(receivedMail.getSenderNickname())
                         .stampType(receivedMail.getStampType())
                         .reviewContent(receivedMail.getContent())
-                        .createdAt(receivedMail.getCreateAt())
+                        .createdAt(receivedMail.getCreatedAt())
                         .build();
                 // 获取原来的邮件的内容
                 String s1 = stringRedisTemplate.opsForValue().get("mail:" + receivedMail.getOriginalMailId());
@@ -422,7 +417,7 @@ public class MailServiceImpl implements MailService {
                             .senderNickname(receivedMail.getSenderNickname())
                             .stampType(receivedMail.getStampType())
                             .reviewContent(receivedMail.getContent())
-                            .createdAt(receivedMail.getCreateAt())
+                            .createdAt(receivedMail.getCreatedAt())
                             .content(getMailById(receivedMail.getOriginalMailId().intValue()).getContent())
                             .build())
                     .collect(Collectors.toList());
@@ -467,7 +462,7 @@ public class MailServiceImpl implements MailService {
                 MailCommentItemVO vo = MailCommentItemVO.builder()
                         .mailId(mc.getMailId())
                         .commentContent(mc.getContent())
-                        .createdAt(mc.getCreateAt())
+                        .createdAt(mc.getCreatedAt())
                         .originalContent(mv != null ? mv.getContent() : null)
                         .originalStampType(mv != null ? mv.getStampType() : null)
                         .originalSenderNickname(mv != null ? mv.getSenderNickname() : null)
@@ -493,7 +488,7 @@ public class MailServiceImpl implements MailService {
                 MailCommentItemVO vo = MailCommentItemVO.builder()
                         .mailId(mc.getMailId())
                         .commentContent(mc.getContent())
-                        .createdAt(mc.getCreateAt())
+                        .createdAt(mc.getCreatedAt())
                         .originalContent(mv != null ? mv.getContent() : null)
                         .originalStampType(mv != null ? mv.getStampType() : null)
                         .originalSenderNickname(mv != null ? mv.getSenderNickname() : null)
@@ -560,7 +555,7 @@ public class MailServiceImpl implements MailService {
             if (page != null && page.getResult() != null) {
                 java.util.List<ReceivedMail> thread = page.getResult().stream()
                         .filter(r -> r.getOriginalMailId() != null && r.getOriginalMailId().equals(mailId))
-                        .sorted(java.util.Comparator.comparing(ReceivedMail::getCreateAt))
+                        .sorted(java.util.Comparator.comparing(ReceivedMail::getCreatedAt))
                         .limit(5)
                         .collect(java.util.stream.Collectors.toList());
                 for (ReceivedMail r : thread) {

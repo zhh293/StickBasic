@@ -1,11 +1,8 @@
 package com.tmd.controller;
 
+import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
-import com.tmd.entity.dto.Result;
-import com.tmd.entity.dto.StickVO;
-import com.tmd.entity.dto.UserProfile;
-import com.tmd.entity.dto.UserUpdateDTO;
-import com.tmd.entity.dto.UserVO;
+import com.tmd.entity.dto.*;
 import com.tmd.entity.po.LoginUser;
 import com.tmd.entity.po.UserData;
 import com.tmd.service.AttachmentService;
@@ -13,16 +10,12 @@ import com.tmd.service.FollowService;
 import com.tmd.service.UserService;
 import com.tmd.tools.BaseContext;
 import com.tmd.tools.JwtUtil;
-import com.tmd.tools.SimpleTools;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.HttpHeaders;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
-import com.tmd.entity.dto.FileUploadResponse;
-import cn.hutool.core.util.StrUtil;
+
 import java.net.URL;
 import java.util.List;
 import java.util.Map;

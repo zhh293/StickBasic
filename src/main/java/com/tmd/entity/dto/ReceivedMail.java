@@ -20,7 +20,7 @@ public class ReceivedMail {
     private String stampType;
     private String senderNickname;
     private Long originalMailId;
-    private mailStatus status;
+    private String status;
     private LocalDateTime readAt;
-    private LocalDateTime createAt;
+    private LocalDateTime createdAt;
 }

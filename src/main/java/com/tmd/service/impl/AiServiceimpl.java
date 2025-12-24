@@ -1,5 +1,6 @@
 package com.tmd.service.impl;
 
+import cn.hutool.json.JSONUtil;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
@@ -9,7 +10,6 @@ import com.tmd.service.AiService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import cn.hutool.json.JSONUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 

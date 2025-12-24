@@ -6,15 +6,16 @@ import com.tmd.entity.dto.UserStatus;
 import com.tmd.mapper.UserMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.data.redis.core.RedisCallback;
-import org.springframework.data.redis.core.ScanOptions;
-import org.springframework.data.redis.core.Cursor;
+
+import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.Set;
-import java.time.LocalDateTime;
 
 @Component
 @Slf4j

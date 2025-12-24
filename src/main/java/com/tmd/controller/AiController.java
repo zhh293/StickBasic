@@ -1,6 +1,5 @@
 package com.tmd.controller;
 
-import com.tmd.config.RabbitMQConfig;
 import com.tmd.entity.dto.Result;
 import com.tmd.entity.dto.StickVO;
 import com.tmd.entity.dto.UserContent;

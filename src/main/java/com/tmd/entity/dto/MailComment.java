@@ -17,5 +17,5 @@ public class MailComment {
     private Long mailId;
     private Long commenterId;
     private String content;
-    private LocalDateTime createAt;
+    private LocalDateTime createdAt;
 }

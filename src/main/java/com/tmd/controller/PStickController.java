@@ -1,7 +1,6 @@
 package com.tmd.controller;
 
 import cn.hutool.json.JSONUtil;
-import com.alibaba.fastjson.JSON;
 import com.tmd.entity.dto.PStickVO;
 import com.tmd.entity.dto.PageResult;
 import com.tmd.entity.dto.Result;

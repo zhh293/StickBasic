@@ -26,11 +26,8 @@ spring:
     port: 5672
   ai:
     openai:
-      api-key: sk-35b17d7ae2a0404fafe57a5ba2ad6ef3
-      base-url: https://dashscope.aliyuncs.com/compatible-mode
-      chat:
-        options:
-          model: qwen-plus
+      api-key:  ${OPENAI_API_KEY:sk-e5zWuv9LGJfOAiwJMqREqqRli8AJ8hc8eU69AW3MxY5sC2cN}
+      base-url: ${OPENAI_BASE_URL:https://api.xty.app}
       embedding:
         options:
           model: text-embedding-v3

@@ -3,11 +3,7 @@ package com.tmd.mapper;
 import com.tmd.entity.dto.UserProfile;
 import com.tmd.entity.dto.UserUpdateDTO;
 import com.tmd.entity.po.UserData;
-import org.apache.ibatis.annotations.Insert;
-import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Options;
-import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.*;
 
 @Mapper
 public interface UserMapper {

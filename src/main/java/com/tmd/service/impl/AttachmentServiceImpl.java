@@ -1,9 +1,9 @@
 package com.tmd.service.impl;
 
 import com.tmd.config.RedisCache;
+import com.tmd.entity.dto.AliOssUtil;
 import com.tmd.entity.dto.Attachment;
 import com.tmd.entity.dto.FileUploadResponse;
-import com.tmd.entity.dto.AliOssUtil;
 import com.tmd.mapper.AttachmentMapper;
 import com.tmd.service.AttachmentService;
 import com.tmd.tools.RedisIdWorker;
@@ -246,10 +246,6 @@ public class AttachmentServiceImpl implements AttachmentService {
             }
             log.debug("从MySQL获取业务附件列表并写入缓存: businessType={}, businessId={}, count={}",
                     businessType, businessId, attachments.size());
-        } else {
-            // 防止缓存穿透：缓存空结果，但过期时间较短
-            redisCache.setCacheList(cacheKey, new ArrayList<>());
-            redisCache.expire(cacheKey, 1, TimeUnit.HOURS);
         }
         return attachments != null ? attachments : new ArrayList<>();
     }

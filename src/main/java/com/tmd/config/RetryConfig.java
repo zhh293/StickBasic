@@ -3,13 +3,13 @@ package com.tmd.config;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.retry.annotation.EnableRetry;
 import org.springframework.retry.backoff.ExponentialBackOffPolicy;
 import org.springframework.retry.backoff.FixedBackOffPolicy;
 import org.springframework.retry.policy.SimpleRetryPolicy;
 import org.springframework.retry.support.RetryTemplate;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -25,6 +25,7 @@ public class RetryConfig {
      * 1. 通用重试模板（支持指数退避 + 异常过滤）
      * 适用于Redis操作重试（网络抖动/连接超时场景）
      */
+    @Primary
     @Bean("redisRetryTemplate")
     public RetryTemplate redisRetryTemplate() {
         RetryTemplate retryTemplate = new RetryTemplate();
