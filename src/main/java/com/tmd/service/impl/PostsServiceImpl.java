@@ -883,6 +883,79 @@ public class PostsServiceImpl implements PostsService {
         return Result.success("评论成功");
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Result createReplyComment(Long userId, Long postId, Long commentId, CommentCreateDTO dto) {
+        // 清洗数据
+        String content = dto.getContent();
+        if (StrUtil.isBlank(content)) {
+            return Result.error("请输入内容");
+        }
+        // XSS 过滤
+        content = cn.hutool.http.HtmlUtil.filter(content);
+
+        // 查找父评论，确定rootId
+        PostComment parent = postCommentMapper.selectById(commentId);
+        if (parent == null) {
+            return Result.error("回复的评论不存在");
+        }
+
+        long rootId = (parent.getParentId() == 0L) ? parent.getId() : parent.getRootId();
+
+        long l = redisIdWorker.nextId("postcomment");
+        PostComment comment = PostComment.builder()
+                .id(l)
+                .postId(postId)
+                .commenterId(userId)
+                .createdAt(LocalDateTime.now())
+                .dislikes(0)
+                .likes(0)
+                .parentId(commentId)
+                .rootId(rootId)
+                .replyCount(0)
+                .content(content)
+                .build();
+
+        // 构建实体，准备更新数据库
+        postCommentMapper.insert(comment);
+
+        // 更新缓存：子评论ZSet (rootId维度)
+        // Key: post:comment:child:{rootId}
+        String childCommentKey = String.format(POST_COMMENT_CHILD_KEY_FMT, rootId);
+        stringRedisTemplate.opsForZSet().add(childCommentKey, String.valueOf(l),
+                comment.getCreatedAt().toInstant(ZoneOffset.of("+8")).toEpochMilli());
+
+        // 更新缓存：评论内容 (id维度)
+        String contentKey = String.format(POST_COMMENT_CONTENT_KEY_FMT, l);
+        stringRedisTemplate.opsForValue().set(contentKey, content, ttlJitter(LIST_TTL_SECONDS), TimeUnit.SECONDS);
+
+        // 更新缓存：根评论的子评论数量 (postId维度, member=rootId, score=count)
+        String childCountKey = String.format(POST_COMMENT_CHILD_COUNT_KEY_FMT, postId);
+        stringRedisTemplate.opsForZSet().incrementScore(childCountKey, String.valueOf(rootId), 1);
+
+        // 标记为脏数据（用于定时任务兜底）
+        stringRedisTemplate.opsForSet().add(POST_COMMENT_DIRTY_SET_KEY, String.valueOf(postId));
+
+        // 异步更新逻辑
+        threadPoolConfig.threadPoolExecutor().execute(() -> {
+            try {
+                // 1. 更新帖子维度的评论总数 (批量刷盘)
+                String flushKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, postId);
+                Long val = stringRedisTemplate.opsForValue().increment(flushKey, 1);
+                int pending = val != null ? val.intValue() : 0;
+                if (pending >= POST_COMMENT_FLUSH_THRESHOLD) {
+                    flushCommentCount(postId);
+                }
+
+                // 2. 异步直接更新数据库中根评论的回复数 (简单直接)
+                postCommentMapper.incrReplyCount(rootId, 1);
+            } catch (Exception ignore) {
+            }
+        });
+
+        return Result.success("回复成功");
+    }
+
     /**
      * 定时任务：每分钟检查并刷新未达到阈值的评论计数
      */
@@ -958,12 +1031,8 @@ public class PostsServiceImpl implements PostsService {
             }
         }
     }
-    @Override
-    public Result createReplyComment(Long userId, Long postId, Long commentId, CommentCreateDTO dto) {
-        
-        return null;
-        
-    }
+
+    
 
     @Override
     public Result createPost(Long userId, PostCreateDTO dto) {
