@@ -1,5 +1,6 @@
 package com.tmd.service;
 
+import com.tmd.entity.dto.CommentCreateDTO;
 import com.tmd.entity.dto.PostCreateDTO;
 import com.tmd.entity.dto.Result;
 
@@ -33,4 +34,7 @@ public interface PostsService {
     Result toggleFavorite(Long postId);
 
     Result getUserFavorites(Integer page, Integer size);
+
+    Result createComment(Long userId, Long postId, CommentCreateDTO dto);
+    Result createReplyComment(Long userId, Long postId, Long commentId, CommentCreateDTO dto);
 }

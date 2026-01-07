@@ -51,4 +51,7 @@ public interface PostsMapper {
 
     @Update("update posts set collect_count = IFNULL(collect_count,0) + #{delta} where id = #{id}")
     int incrCollectCount(@Param("id") Long id, @Param("delta") Integer delta);
+
+    @Update("update posts set comment_count = IFNULL(comment_count,0) + #{delta} where id = #{id}")
+    int incrCommentCount(@Param("id") Long id, @Param("delta") Integer delta);
 }

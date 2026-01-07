@@ -27,12 +27,19 @@ import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.retry.annotation.Retryable;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import static com.tmd.constants.common.ERROR_CODE;
+
+import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -49,6 +56,7 @@ public class PostsServiceImpl implements PostsService {
     private final TopicMapper topicMapper;
     private final LikesMapper likesMapper;
     private final FavoriteMapper favoriteMapper;
+    private final PostCommentMapper postCommentMapper;
 
     @Autowired
     private AttachmentService attachmentService;
@@ -101,22 +109,37 @@ public class PostsServiceImpl implements PostsService {
     /**
      * 缓存帖子列表到Redis，带有重试机制
      */
-    @Retryable(value = { org.springframework.data.redis.RedisConnectionFailureException.class }, // 仅重试Redis连接异常
-            maxAttempts = 3, // 最大重试次数
-            backoff = @org.springframework.retry.annotation.Backoff(delay = 1000, // 初始延迟1秒
-                    multiplier = 2, // 指数倍增长
-                    maxDelay = 5000 // 最大延迟5秒
-            ))
     public void cachePostsList(String sort, String typeKey, String statusKey, List<PostListItemVO> items,
             String type, String status, String listKey, String totalKey) {
-        log.info("开始缓存帖子列表: sort={}, type={}, status={}", sort, typeKey, statusKey);
-        String json = JSONUtil.toJsonStr(items);
-        stringRedisTemplate.opsForValue().set(listKey, json, ttlJitter(LIST_TTL_SECONDS), TimeUnit.SECONDS);
-        long total = postsMapper.count(type, status);
-        stringRedisTemplate.opsForValue().set(totalKey, String.valueOf(total), ttlJitter(TOTAL_TTL_SECONDS),
-                TimeUnit.SECONDS);
-        log.info("帖子列表缓存成功: sort={}, type={}, status={}, listKey={}, totalKey={}", sort, typeKey, statusKey, listKey,
-                totalKey);
+        // 使用手动重试机制替代 @Retryable 注解
+        int maxAttempts = 3;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                log.info("开始缓存帖子列表: sort={}, type={}, status={}, attempt={}", sort, typeKey, statusKey, attempt);
+                String json = JSONUtil.toJsonStr(items);
+                stringRedisTemplate.opsForValue().set(listKey, json, ttlJitter(LIST_TTL_SECONDS), TimeUnit.SECONDS);
+                long total = postsMapper.count(type, status);
+                stringRedisTemplate.opsForValue().set(totalKey, String.valueOf(total), ttlJitter(TOTAL_TTL_SECONDS),
+                        TimeUnit.SECONDS);
+                log.info("帖子列表缓存成功: sort={}, type={}, status={}, listKey={}, totalKey={}", sort, typeKey, statusKey,
+                        listKey,
+                        totalKey);
+                return; // 成功则返回
+            } catch (Exception e) {
+                log.warn("缓存帖子列表失败，第{}次尝试，错误: {}", attempt, e.getMessage());
+                if (attempt == maxAttempts) {
+                    log.error("缓存帖子列表最终失败: sort={}, type={}, status={}", sort, typeKey, statusKey, e);
+                    throw e; // 最后一次尝试失败，抛出异常
+                }
+                // 指数退避
+                try {
+                    Thread.sleep(1000L * (1L << (attempt - 1))); // 1s, 2s, 4s
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException(ie);
+                }
+            }
+        }
     }
 
     @Override
@@ -218,16 +241,29 @@ public class PostsServiceImpl implements PostsService {
                                     .build();
                             items.add(vo);
                         }
-
+                        // 手动重试
                         try {
-                            // 获取本类的代理对象
-                            PostsServiceImpl proxy = (PostsServiceImpl) AopContext.currentProxy();
-                            proxy.cachePostsList(finalSort, typeKey, statusKey, items, type, status, listKey, totalKey);
+                            cachePostsList(finalSort, typeKey, statusKey, items, type, status, listKey, totalKey);
                         } catch (Exception e) {
                             log.error("Cache posts list failed after all retries: sort={}, type={}, status={}",
                                     finalSort, typeKey,
                                     statusKey, e);
                         }
+
+                        /*
+                         * try {
+                         * // 获取本类的代理对象
+                         * PostsServiceImpl proxy = (PostsServiceImpl) AopContext.currentProxy();
+                         * proxy.cachePostsList(finalSort, typeKey, statusKey, items, type, status,
+                         * listKey, totalKey);
+                         * } catch (Exception e) {
+                         * log.
+                         * error("Cache posts list failed after all retries: sort={}, type={}, status={}"
+                         * ,
+                         * finalSort, typeKey,
+                         * statusKey, e);
+                         * }
+                         */
                         // ZSet 分层缓存恢复
                         try {
                             String zsetKeyLatest = String.format(POSTS_ZSET_KEY_FMT, finalSort, typeKey, statusKey);
@@ -779,6 +815,156 @@ public class PostsServiceImpl implements PostsService {
         }
     }
 
+    // 评论的缓存key就这么设计吧，两个Zset负责存储根评论和子评论，一个Zset负责存储根评论的子评论数量
+    //
+    private static final String POST_COMMENT_KEY_FMT = "post:comment:%d";
+    private static final String POST_COMMENT_CHILD_KEY_FMT = "post:comment:child:%d";
+    private static final String POST_COMMENT_CHILD_COUNT_KEY_FMT = "post:comment:child:count:%d";
+    private static final String POST_COMMENT_FLUSH_KEY_FMT = "post:comment:flush:%d";
+    private static final int POST_COMMENT_FLUSH_THRESHOLD = 50;
+    private static final String POST_COMMENT_CONTENT_KEY_FMT = "post:comment:content:%d";
+    private static final String POST_COMMENT_DIRTY_SET_KEY = "post:comment:dirty_set";
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Result createComment(Long userId, Long postId, CommentCreateDTO dto) {
+        // 清洗数据
+        String content = dto.getContent();
+        if (StrUtil.isBlank(content)) {
+            return Result.error("请输入内容");
+        }
+        // XSS 过滤
+        content = cn.hutool.http.HtmlUtil.filter(content);
+
+        long l = redisIdWorker.nextId("postcomment");
+        PostComment comment = PostComment.builder()
+                .id(l)
+                .postId(postId)
+                .commenterId(userId)
+                .createdAt(LocalDateTime.now())
+                .dislikes(0)
+                .likes(0)
+                .parentId(0L)
+                .rootId(l)
+                .replyCount(0)
+                .content(content)
+                .build();
+
+        // 构建实体，准备更新数据库，这里我选择批量刷盘
+        postCommentMapper.insert(comment);
+        // 更新缓存，更新评论和帖子的相关缓存,先更新评论相关的缓存，在更新帖子相关的缓存，最后批量刷盘
+        String RootCommentKey = String.format(POST_COMMENT_KEY_FMT, postId);
+        stringRedisTemplate.opsForZSet().add(RootCommentKey, String.valueOf(l),
+                comment.getCreatedAt().toInstant(ZoneOffset.of("+8")).toEpochMilli());
+
+        // 帖子评论id找内容的字符串缓存
+        String contentKey = String.format(POST_COMMENT_CONTENT_KEY_FMT, l);
+        stringRedisTemplate.opsForValue().set(contentKey, content, ttlJitter(LIST_TTL_SECONDS), TimeUnit.SECONDS);
+
+        // 标记为脏数据（用于定时任务兜底）
+        stringRedisTemplate.opsForSet().add(POST_COMMENT_DIRTY_SET_KEY, String.valueOf(postId));
+
+        // 异步更新帖子评论数量（批量刷盘）
+        threadPoolConfig.threadPoolExecutor().execute(() -> {
+            try {
+                String flushKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, postId);
+                // 增加待更新计数
+                Long val = stringRedisTemplate.opsForValue().increment(flushKey, 1);
+                int pending = val != null ? val.intValue() : 0;
+
+                if (pending >= POST_COMMENT_FLUSH_THRESHOLD) {
+                    flushCommentCount(postId);
+                }
+            } catch (Exception ignore) {
+            }
+        });
+
+        // 更新完可以选择预热一下
+        return Result.success("评论成功");
+    }
+
+    /**
+     * 定时任务：每分钟检查并刷新未达到阈值的评论计数
+     */
+    @Scheduled(cron = "0 0/1 * * * ?")
+    public void scheduledFlushCommentCounts() {
+        try {
+            Set<String> dirtyIds = stringRedisTemplate.opsForSet().members(POST_COMMENT_DIRTY_SET_KEY);
+            if (dirtyIds != null && !dirtyIds.isEmpty()) {
+                for (String idStr : dirtyIds) {
+                    Long postId = Long.valueOf(idStr);
+                    threadPoolConfig.threadPoolExecutor().execute(() -> flushCommentCount(postId));
+                }
+            }
+        } catch (Exception ignore) {
+        }
+    }
+
+    /**
+     * 执行评论数刷盘逻辑
+     */
+    private void flushCommentCount(Long postId) {
+        String lockKey = "lock:post:comment:flush:" + postId;
+        var lock = redissonClient.getLock(lockKey);
+        boolean ok = false;
+        try {
+            ok = lock.tryLock(5, 10, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+        }
+        if (ok) {
+            try {
+                String flushKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, postId);
+                String cur = stringRedisTemplate.opsForValue().get(flushKey);
+                int delta = 0;
+                if (StrUtil.isNotBlank(cur)) {
+                    try {
+                        delta = Integer.parseInt(cur);
+                    } catch (Exception ignore) {
+                    }
+                }
+                if (delta > 0) {
+                    // 更新数据库
+                    postsMapper.incrCommentCount(postId, delta);
+                    // 更新 ES
+                    try {
+                        Map<String, Object> params = new java.util.HashMap<>();
+                        params.put("commentDelta", delta);
+                        Script script = new Script(ScriptType.INLINE, "painless",
+                                "ctx._source.commentCount = (ctx._source.commentCount != null ? ctx._source.commentCount : 0) + params.commentDelta",
+                                params);
+                        UpdateRequest ur = new UpdateRequest(INDEX_POSTS, String.valueOf(postId))
+                                .script(script);
+                        esClient.update(ur, RequestOptions.DEFAULT);
+                    } catch (Exception ignore) {
+                    }
+                    // 扣减 Redis 计数
+                    try {
+                        Long remaining = stringRedisTemplate.opsForValue().decrement(flushKey, delta);
+                        // 如果剩余计数为0，从脏集合中移除
+                        if (remaining != null && remaining <= 0) {
+                            stringRedisTemplate.opsForSet().remove(POST_COMMENT_DIRTY_SET_KEY, String.valueOf(postId));
+                        }
+                    } catch (Exception ignore) {
+                    }
+                } else {
+                    // 没有待更新的计数，直接移除脏标记
+                    stringRedisTemplate.opsForSet().remove(POST_COMMENT_DIRTY_SET_KEY, String.valueOf(postId));
+                }
+            } finally {
+                try {
+                    lock.unlock();
+                } catch (Exception ignore) {
+                }
+            }
+        }
+    }
+    @Override
+    public Result createReplyComment(Long userId, Long postId, Long commentId, CommentCreateDTO dto) {
+        
+        return null;
+        
+    }
+
     @Override
     public Result createPost(Long userId, PostCreateDTO dto) {
         String rk = "rate:post:create:" + userId;
@@ -788,7 +974,8 @@ public class PostsServiceImpl implements PostsService {
             if (rcv != null && rcv == 1L) {
                 stringRedisTemplate.expire(rk, RATE_LIMIT_CREATE_WINDOW_SECONDS, TimeUnit.SECONDS);
             }
-        } catch (Exception ignore) {}
+        } catch (Exception ignore) {
+        }
         if (rcv != null && rcv > RATE_LIMIT_CREATE_THRESHOLD) {
             return Result.error("请求过于频繁");
         }
@@ -911,9 +1098,11 @@ public class PostsServiceImpl implements PostsService {
                                         .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
                         List<PostListItemVO> items = new ArrayList<>();
                         for (Post p : firstPage) {
-                            UserProfile profile = userService.getProfile(p.getUserId());
-                            String username = profile != null ? profile.getUsername() : null;
-                            String avatar = profile != null ? profile.getAvatar() : null;
+                            /*
+                             * UserProfile profile = userService.getProfile(p.getUserId());
+                             * String username = profile != null ? profile.getUsername() : null;
+                             * String avatar = profile != null ? profile.getAvatar() : null;
+                             */
                             String topicName = null;
                             if (p.getTopicId() != null) {
                                 TopicVO topicVO = topicService.getTopicCachedById(p.getTopicId().intValue());
@@ -934,8 +1123,10 @@ public class PostsServiceImpl implements PostsService {
                                     .title(p.getTitle())
                                     .content(p.getContent())
                                     .userId(p.getUserId())
-                                    .authorUsername(username)
-                                    .authorAvatar(avatar)
+                                    /*
+                                     * .authorUsername(username)
+                                     * .authorAvatar(avatar)
+                                     */
                                     .topicId(p.getTopicId())
                                     .topicName(topicName)
                                     .likeCount(p.getLikeCount())
@@ -979,9 +1170,11 @@ public class PostsServiceImpl implements PostsService {
                                             .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
                             List<PostListItemVO> itemsT = new ArrayList<>();
                             for (Post p : firstPageByTopic) {
-                                UserProfile profile = userService.getProfile(p.getUserId());
-                                String username = profile != null ? profile.getUsername() : null;
-                                String avatar = profile != null ? profile.getAvatar() : null;
+                                /*
+                                 * UserProfile profile = userService.getProfile(p.getUserId());
+                                 * String username = profile != null ? profile.getUsername() : null;
+                                 * String avatar = profile != null ? profile.getAvatar() : null;
+                                 */
                                 String topicName = null;
                                 if (p.getTopicId() != null) {
                                     TopicVO topicVO = topicService.getTopicCachedById(p.getTopicId().intValue());
@@ -1002,8 +1195,10 @@ public class PostsServiceImpl implements PostsService {
                                         .title(p.getTitle())
                                         .content(p.getContent())
                                         .userId(p.getUserId())
-                                        .authorUsername(username)
-                                        .authorAvatar(avatar)
+                                        /*
+                                         * .authorUsername(username)
+                                         * .authorAvatar(avatar)
+                                         */
                                         .topicId(p.getTopicId())
                                         .topicName(topicName)
                                         .likeCount(p.getLikeCount())
@@ -1055,9 +1250,11 @@ public class PostsServiceImpl implements PostsService {
 
                 // ES 索引写入
                 try {
-                    UserProfile profile = userService.getProfile(post.getUserId());
-                    String username = profile != null ? profile.getUsername() : null;
-                    String avatar = profile != null ? profile.getAvatar() : null;
+                    /*
+                     * UserProfile profile = userService.getProfile(post.getUserId());
+                     * String username = profile != null ? profile.getUsername() : null;
+                     * String avatar = profile != null ? profile.getAvatar() : null;
+                     */
                     String topicName = null;
                     if (post.getTopicId() != null) {
                         TopicVO topicVO = topicService.getTopicCachedById(post.getTopicId().intValue());
@@ -1069,8 +1266,10 @@ public class PostsServiceImpl implements PostsService {
                     doc.put("topicId", post.getTopicId());
                     doc.put("title", post.getTitle());
                     doc.put("content", post.getContent());
-                    doc.put("authorUsername", username);
-                    doc.put("authorAvatar", avatar);
+                    /*
+                     * doc.put("authorUsername", username);
+                     * doc.put("authorAvatar", avatar);
+                     */
                     doc.put("topicName", topicName);
                     doc.put("collectCount", post.getCollectCount());
                     doc.put("likeCount", post.getLikeCount());

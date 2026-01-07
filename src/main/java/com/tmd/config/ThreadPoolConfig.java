@@ -16,7 +16,7 @@ public class ThreadPoolConfig {
                 50,
                 10,
                 TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(10),
+                new LinkedBlockingQueue<>(200),
                 new ThreadPoolExecutor.AbortPolicy()
         );
     }

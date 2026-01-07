@@ -1,6 +1,7 @@
 package com.tmd.controller;
 
 
+import com.tmd.entity.dto.CommentCreateDTO;
 import com.tmd.entity.dto.PostCreateDTO;
 import com.tmd.entity.dto.Result;
 import com.tmd.service.PostsService;
@@ -130,4 +131,29 @@ public class PostsController {
     public Result openShare(@PathVariable String token) {
         return postsService.openShareLink(token);
     }
+    //帖子评论（根评论）
+    @PostMapping("/{postId}/comment")
+    public Result createComment(@PathVariable Long postId,
+                                @RequestBody CommentCreateDTO dto) {
+        Long userId = BaseContext.get();
+        if (userId == null || userId == ERROR_CODE) {
+            return Result.error("验证失败,非法访问");
+        }
+        log.info("用户 {} 正在创建帖子 {} 的评论", userId, postId);
+        return postsService.createComment(userId, postId, dto);
+    }
+    //帖子评论（子评论）
+    @PostMapping("/{postId}/comment/{commentId}")
+    public Result createReplyComment(@PathVariable Long postId,
+                                     @PathVariable Long commentId,
+                                     @RequestBody CommentCreateDTO dto) {
+        Long userId = BaseContext.get();
+        if (userId == null || userId == ERROR_CODE) {
+            return Result.error("验证失败,非法访问");
+        }
+        log.info("用户 {} 正在回复帖子 {} 的评论 {}", userId, postId, commentId);
+        return postsService.createReplyComment(userId, postId, commentId, dto);
+    }
+
+    //这个里面也要考虑使用缓存了，看看怎么样能实现一个稳定高效的评论系统。。
 }
