@@ -37,4 +37,5 @@ public interface PostsService {
 
     Result createComment(Long userId, Long postId, CommentCreateDTO dto);
     Result createReplyComment(Long userId, Long postId, Long commentId, CommentCreateDTO dto);
+    Result deleteComment(Long userId, Long commentId);
 }

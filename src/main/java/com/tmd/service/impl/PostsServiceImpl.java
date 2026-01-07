@@ -842,6 +842,7 @@ public class PostsServiceImpl implements PostsService {
                 return Result.error("用户不存在或已删除");
             }
         } catch (Exception e) {
+            log.error("Bloom filter check failed", e);
             return Result.error("服务器繁忙");
         }
         // 清洗数据
@@ -891,7 +892,8 @@ public class PostsServiceImpl implements PostsService {
                 if (pending >= POST_COMMENT_FLUSH_THRESHOLD) {
                     flushCommentCount(postId);
                 }
-            } catch (Exception ignore) {
+            } catch (Exception e) {
+                log.error("Async flush comment count failed for post: {}", postId, e);
             }
         });
 
@@ -902,20 +904,21 @@ public class PostsServiceImpl implements PostsService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Result createReplyComment(Long userId, Long postId, Long commentId, CommentCreateDTO dto) {
-        try{
+        try {
             RBloomFilter<Long> postBloom = redissonClient.getBloomFilter("bf:post:id");
-                postBloom.tryInit(10_000_000L, 0.03);
-                if (!postBloom.contains(postId)) {
-                    // 允许旁路计数以免影响体验，但不做UV
-                    return Result.error("帖子不存在或已删除");
-                }
+            postBloom.tryInit(10_000_000L, 0.03);
+            if (!postBloom.contains(postId)) {
+                // 允许旁路计数以免影响体验，但不做UV
+                return Result.error("帖子不存在或已删除");
+            }
             RBloomFilter<Long> userBloom = redissonClient.getBloomFilter("bf:user:id");
-                userBloom.tryInit(10_000_000L, 0.03);
-                if (!userBloom.contains(userId)) {
-                    // 允许旁路计数以免影响体验，但不做UV
-                    return Result.error("用户不存在或已删除");
-                }
-        }catch (Exception e){
+            userBloom.tryInit(10_000_000L, 0.03);
+            if (!userBloom.contains(userId)) {
+                // 允许旁路计数以免影响体验，但不做UV
+                return Result.error("用户不存在或已删除");
+            }
+        } catch (Exception e) {
+            log.error("Bloom filter check failed in reply comment", e);
             return Result.error("服务器繁忙");
         }
         // 清洗数据
@@ -981,7 +984,8 @@ public class PostsServiceImpl implements PostsService {
 
                 // 2. 异步直接更新数据库中根评论的回复数 (简单直接)
                 postCommentMapper.incrReplyCount(rootId, 1);
-            } catch (Exception ignore) {
+            } catch (Exception e) {
+                log.error("Async flush reply count failed for post: {}", postId, e);
             }
         });
 
@@ -1027,7 +1031,7 @@ public class PostsServiceImpl implements PostsService {
                     } catch (Exception ignore) {
                     }
                 }
-                if (delta > 0) {
+                if (delta != 0) {
                     // 更新数据库
                     postsMapper.incrCommentCount(postId, delta);
                     // 更新 ES
@@ -1044,9 +1048,12 @@ public class PostsServiceImpl implements PostsService {
                     }
                     // 扣减 Redis 计数
                     try {
+                        // 如果 delta 为正，扣减 delta (decrement positive) -> 减少计数
+                        // 如果 delta 为负，扣减 delta (decrement negative) -> 增加计数（即归零）
                         Long remaining = stringRedisTemplate.opsForValue().decrement(flushKey, delta);
-                        // 如果剩余计数为0，从脏集合中移除
-                        if (remaining != null && remaining <= 0) {
+                        // 如果剩余计数为0（或者符号改变，说明处理完了），从脏集合中移除
+                        // 简单判断：如果 remaining == 0，则移除
+                        if (remaining != null && remaining == 0) {
                             stringRedisTemplate.opsForSet().remove(POST_COMMENT_DIRTY_SET_KEY, String.valueOf(postId));
                         }
                     } catch (Exception ignore) {
@@ -1064,7 +1071,105 @@ public class PostsServiceImpl implements PostsService {
         }
     }
 
-    
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Result deleteComment(Long userId, Long commentId) {
+        if (userId == null || userId == ERROR_CODE) {
+            return Result.error("验证失败,非法访问");
+        }
+        if (commentId == null || commentId <= 0) {
+            return Result.error("评论 ID 无效");
+        }
+        // 检查评论是否存在
+        PostComment comment = postCommentMapper.selectById(commentId);
+        if (comment == null) {
+            return Result.error("评论不存在");
+        }
+        // 检查用户是否有权限删除
+        if (!comment.getCommenterId().equals(userId)) {
+            return Result.error("没有权限删除此评论");
+        }
+
+        Long postId = comment.getPostId();
+        List<Long> idsToDelete = new ArrayList<>();
+        idsToDelete.add(commentId);
+
+        // 如果是根评论，需要删除所有子评论
+        if (comment.getParentId() == 0L) {
+            List<Long> childIds = postCommentMapper.selectIdsByRootId(commentId);
+            if (childIds != null && !childIds.isEmpty()) {
+                idsToDelete.addAll(childIds);
+            }
+        }
+        // 如果是子评论，仅删除自己（已加入 idsToDelete）
+
+        // 批量删除数据库
+        postCommentMapper.deleteBatchIds(idsToDelete);
+
+        // 更新缓存
+        // 1. 删除内容缓存
+        for (Long id : idsToDelete) {
+            String contentKey = String.format(POST_COMMENT_CONTENT_KEY_FMT, id);
+            stringRedisTemplate.delete(contentKey);
+        }
+
+        if (comment.getParentId() == 0L) {
+            // 是根评论
+            // 2. 删除帖子下的该根评论 (ZSet)
+            String rootCommentKey = String.format(POST_COMMENT_KEY_FMT, postId);
+            stringRedisTemplate.opsForZSet().remove(rootCommentKey, String.valueOf(commentId));
+
+            // 3. 删除该根评论下的所有子评论 (ZSet)
+            String childCommentKey = String.format(POST_COMMENT_CHILD_KEY_FMT, commentId);
+            stringRedisTemplate.delete(childCommentKey);
+
+            // 4. 删除帖子下该根评论的子评论计数 (ZSet)
+            String childCountKey = String.format(POST_COMMENT_CHILD_COUNT_KEY_FMT, postId);
+            stringRedisTemplate.opsForZSet().remove(childCountKey, String.valueOf(commentId));
+
+        } else {
+            // 是子评论
+            long rootId = comment.getRootId();
+            // 2. 从根评论的子评论列表移除 (ZSet)
+            String childCommentKey = String.format(POST_COMMENT_CHILD_KEY_FMT, rootId);
+            stringRedisTemplate.opsForZSet().remove(childCommentKey, String.valueOf(commentId));
+
+            // 3. 更新根评论的子评论计数 (ZSet)
+            String childCountKey = String.format(POST_COMMENT_CHILD_COUNT_KEY_FMT, postId);
+            stringRedisTemplate.opsForZSet().incrementScore(childCountKey, String.valueOf(rootId), -1);
+
+            // 4. 更新数据库中根评论的 reply_count (直接减少1)
+            // 同步更新以保证数据强一致性（在事务内）
+            postCommentMapper.incrReplyCount(rootId, -1);
+        }
+
+        // 异步批量刷盘更新帖子总评论数
+        int deletedCount = idsToDelete.size();
+        threadPoolConfig.threadPoolExecutor().execute(() -> {
+            try {
+                // 减少待更新计数 (delta 为负数)
+                String flushKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, postId);
+                // increment 传入负数即为减
+                Long val = stringRedisTemplate.opsForValue().increment(flushKey, -deletedCount);
+
+                // 标记脏数据
+                stringRedisTemplate.opsForSet().add(POST_COMMENT_DIRTY_SET_KEY, String.valueOf(postId));
+
+                // 触发检查（如果是负数积累多了也需要刷新吗？当然）
+                // 绝对值判断？或者只要有值就判断？
+                // 之前的逻辑是 pending >= THRESHOLD，现在 pending 可能是负数。
+                // 假设 THRESHOLD 是 50。 如果 pending 是 -50，也应该刷。
+                long currentPending = val != null ? val : 0;
+                if (Math.abs(currentPending) >= POST_COMMENT_FLUSH_THRESHOLD) {
+                    flushCommentCount(postId);
+                }
+            } catch (Exception e) {
+                log.error("Async flush comment count failed in delete for post: {}", postId, e);
+            }
+        });
+
+        return Result.success("评论删除成功");
+    }
 
     @Override
     public Result createPost(Long userId, PostCreateDTO dto) {

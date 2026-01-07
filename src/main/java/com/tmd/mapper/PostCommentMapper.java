@@ -19,4 +19,15 @@ public interface PostCommentMapper {
 
     @Update("UPDATE post_comments SET reply_count = reply_count + #{delta} WHERE id = #{id}")
     int incrReplyCount(@Param("id") Long id, @Param("delta") int delta);
+
+    @Select("SELECT id FROM post_comments WHERE root_id = #{rootId}")
+    java.util.List<Long> selectIdsByRootId(@Param("rootId") Long rootId);
+
+    @org.apache.ibatis.annotations.Delete("<script>" +
+            "DELETE FROM post_comments WHERE id IN " +
+            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>" +
+            "#{id}" +
+            "</foreach>" +
+            "</script>")
+    int deleteBatchIds(@Param("ids") java.util.List<Long> ids);
 }

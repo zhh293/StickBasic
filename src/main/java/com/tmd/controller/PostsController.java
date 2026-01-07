@@ -155,5 +155,16 @@ public class PostsController {
         return postsService.createReplyComment(userId, postId, commentId, dto);
     }
 
+    @DeleteMapping("/comment/{commentId}")
+    public Result deleteComment(@PathVariable Long commentId) {
+        Long userId = BaseContext.get();
+        if (userId == null || userId == ERROR_CODE) {
+            return Result.error("验证失败,非法访问");
+        }
+        log.info("用户 {} 正在删除评论 {}", userId, commentId);
+        return postsService.deleteComment(userId, commentId);
+    }
+    
+
     //这个里面也要考虑使用缓存了，看看怎么样能实现一个稳定高效的评论系统。。
 }
