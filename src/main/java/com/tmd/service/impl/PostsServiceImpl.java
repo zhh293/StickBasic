@@ -828,6 +828,22 @@ public class PostsServiceImpl implements PostsService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Result createComment(Long userId, Long postId, CommentCreateDTO dto) {
+        try {
+            RBloomFilter<Long> postBloom = redissonClient.getBloomFilter("bf:post:id");
+            postBloom.tryInit(10_000_000L, 0.03);
+            if (!postBloom.contains(postId)) {
+                // 允许旁路计数以免影响体验，但不做UV
+                return Result.error("帖子不存在或已删除");
+            }
+            RBloomFilter<Long> userBloom = redissonClient.getBloomFilter("bf:user:id");
+            userBloom.tryInit(10_000_000L, 0.03);
+            if (!userBloom.contains(userId)) {
+                // 允许旁路计数以免影响体验，但不做UV
+                return Result.error("用户不存在或已删除");
+            }
+        } catch (Exception e) {
+            return Result.error("服务器繁忙");
+        }
         // 清洗数据
         String content = dto.getContent();
         if (StrUtil.isBlank(content)) {
@@ -886,6 +902,22 @@ public class PostsServiceImpl implements PostsService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Result createReplyComment(Long userId, Long postId, Long commentId, CommentCreateDTO dto) {
+        try{
+            RBloomFilter<Long> postBloom = redissonClient.getBloomFilter("bf:post:id");
+                postBloom.tryInit(10_000_000L, 0.03);
+                if (!postBloom.contains(postId)) {
+                    // 允许旁路计数以免影响体验，但不做UV
+                    return Result.error("帖子不存在或已删除");
+                }
+            RBloomFilter<Long> userBloom = redissonClient.getBloomFilter("bf:user:id");
+                userBloom.tryInit(10_000_000L, 0.03);
+                if (!userBloom.contains(userId)) {
+                    // 允许旁路计数以免影响体验，但不做UV
+                    return Result.error("用户不存在或已删除");
+                }
+        }catch (Exception e){
+            return Result.error("服务器繁忙");
+        }
         // 清洗数据
         String content = dto.getContent();
         if (StrUtil.isBlank(content)) {
