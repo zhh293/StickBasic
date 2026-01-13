@@ -309,8 +309,8 @@ public class PostsServiceImpl implements PostsService {
                 redissonClient.getLock(lockKey).unlock();
             }
             PageResult pageResult = PageResult.builder()
-                    .rows(Collections.emptyList())
-                    .total(0L)
+                    .rows(items)
+                    .total(total)
                     .build();
             return Result.success(pageResult);
         } else {
