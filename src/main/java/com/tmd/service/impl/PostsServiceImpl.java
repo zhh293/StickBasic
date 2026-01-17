@@ -265,21 +265,21 @@ public class PostsServiceImpl implements PostsService {
                          * }
                          */
                         // ZSet 分层缓存恢复
-                        try {
-                            String zsetKeyLatest = String.format(POSTS_ZSET_KEY_FMT, finalSort, typeKey, statusKey);
-                            for (Post p : posts) {
-                                double scoreLatest = p.getCreatedAt() == null ? 0D
-                                        : p.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
-                                stringRedisTemplate.opsForZSet().add(zsetKeyLatest, String.valueOf(p.getId()),
-                                        scoreLatest);
-                                double scoreHot = p.getViewCount() == null ? 0D : p.getViewCount().doubleValue();
-                                String zsetKeyHot = String.format(POSTS_ZSET_KEY_FMT, "hot", typeKey, statusKey);
-                                stringRedisTemplate.opsForZSet().add(zsetKeyHot, String.valueOf(p.getId()), scoreHot);
-                            }
-                        } catch (Exception e) {
-                            log.warn("Restore ZSet cache failed: sort={}, type={}, status={}", finalSort, typeKey,
-                                    statusKey, e);
-                        }
+//                        try {
+//                            String zsetKeyLatest = String.format(POSTS_ZSET_KEY_FMT, finalSort, typeKey, statusKey);
+//                            for (Post p : posts) {
+//                                double scoreLatest = p.getCreatedAt() == null ? 0D
+//                                        : p.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+//                                stringRedisTemplate.opsForZSet().add(zsetKeyLatest, String.valueOf(p.getId()),
+//                                        scoreLatest);
+//                                double scoreHot = p.getViewCount() == null ? 0D : p.getViewCount().doubleValue();
+//                                String zsetKeyHot = String.format(POSTS_ZSET_KEY_FMT, "hot", typeKey, statusKey);
+//                                stringRedisTemplate.opsForZSet().add(zsetKeyHot, String.valueOf(p.getId()), scoreHot);
+//                            }
+//                        } catch (Exception e) {
+//                            log.warn("Restore ZSet cache failed: sort={}, type={}, status={}", finalSort, typeKey,
+//                                    statusKey, e);
+//                        }
 
                         // Bloom 过滤器维护（用户、话题、帖子）
                         try {
@@ -713,6 +713,7 @@ public class PostsServiceImpl implements PostsService {
                                 try {
                                     pending = Integer.parseInt(val);
                                 } catch (Exception ignore) {
+                                    throw new RuntimeException("非法刷盘值");
                                 }
                             }
                             if (pending >= POST_FAV_FLUSH_THRESHOLD) {
@@ -722,6 +723,8 @@ public class PostsServiceImpl implements PostsService {
                                 try {
                                     ok2 = l.tryLock(5, 10, java.util.concurrent.TimeUnit.SECONDS);
                                 } catch (InterruptedException ignored) {
+                                    log.error("锁异常");
+                                    throw new RuntimeException("莫名中断");
                                 }
                                 if (ok2) {
                                     try {

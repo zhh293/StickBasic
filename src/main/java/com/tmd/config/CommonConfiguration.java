@@ -2,6 +2,7 @@ package com.tmd.config;
 
 import com.tmd.entity.dto.AliOssUtil;
 import com.tmd.properties.AliOssProperties;
+import com.tmd.tools.NeedTools;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.QuestionAnswerAdvisor;
@@ -34,6 +35,22 @@ public class CommonConfiguration {
         @Bean
         public VectorStore vectorStore(OpenAiEmbeddingModel embeddingModel) {
                 return SimpleVectorStore.builder(embeddingModel).build();
+        }
+        @Bean("DistinguishWordClient")
+        public ChatClient DistinguishChatClient(OpenAiChatModel model){
+                return ChatClient.builder(model)
+                        .defaultSystem(DISTINGUISH_WORD_PROMPT)
+                        .defaultAdvisors(new SimpleLoggerAdvisor())
+                        .build();
+        }
+
+        @Bean("testWordChatClient")
+        public ChatClient testWordChatClient(OpenAiChatModel model, NeedTools needTools){
+                return ChatClient.builder(model)
+                        .defaultSystem(PREDICT_WORD_PROMPT)
+                        .defaultAdvisors(new SimpleLoggerAdvisor())
+                        .defaultTools(needTools)
+                        .build();
         }
 
         @Bean("chatClient")
