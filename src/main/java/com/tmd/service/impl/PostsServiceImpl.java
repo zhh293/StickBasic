@@ -20,13 +20,11 @@ import org.elasticsearch.script.Script;
 import org.elasticsearch.script.ScriptType;
 import org.redisson.api.RBloomFilter;
 import org.redisson.api.RedissonClient;
-import org.springframework.aop.framework.AopContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.retry.annotation.Retryable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,6 +41,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 @Service
@@ -110,7 +109,7 @@ public class PostsServiceImpl implements PostsService {
      * 缓存帖子列表到Redis，带有重试机制
      */
     public void cachePostsList(String sort, String typeKey, String statusKey, List<PostListItemVO> items,
-            String type, String status, String listKey, String totalKey) {
+            String type, String status, String listKey, String totalKey,long total) {
         // 使用手动重试机制替代 @Retryable 注解
         int maxAttempts = 3;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -118,7 +117,7 @@ public class PostsServiceImpl implements PostsService {
                 log.info("开始缓存帖子列表: sort={}, type={}, status={}, attempt={}", sort, typeKey, statusKey, attempt);
                 String json = JSONUtil.toJsonStr(items);
                 stringRedisTemplate.opsForValue().set(listKey, json, ttlJitter(LIST_TTL_SECONDS), TimeUnit.SECONDS);
-                long total = postsMapper.count(type, status);
+
                 stringRedisTemplate.opsForValue().set(totalKey, String.valueOf(total), ttlJitter(TOTAL_TTL_SECONDS),
                         TimeUnit.SECONDS);
                 log.info("帖子列表缓存成功: sort={}, type={}, status={}, listKey={}, totalKey={}", sort, typeKey, statusKey,
@@ -175,7 +174,8 @@ public class PostsServiceImpl implements PostsService {
             PageResult pageResult = PageResult.builder().total(total).rows(rows).build();
             return Result.success(pageResult);
         }
-
+        List<PostListItemVO> items = new ArrayList<>();
+        AtomicLong total = new AtomicLong();
         // 缓存未命中，尝试加锁并异步恢复缓存；返回提示
         String lockKey = "redisLock:" + listKey;
         boolean locked = redissonClient.getLock(lockKey).tryLock(-1, 30, TimeUnit.SECONDS);
@@ -198,7 +198,7 @@ public class PostsServiceImpl implements PostsService {
                                         .filter(a -> a.getBusinessId() != null)
                                         .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
 
-                        List<PostListItemVO> items = new ArrayList<>();
+
                         for (Post p : posts) {
                             // 作者信息（走缓存）
                             UserProfile profile = userService.getProfile(p.getUserId());
@@ -243,7 +243,9 @@ public class PostsServiceImpl implements PostsService {
                         }
                         // 手动重试
                         try {
-                            cachePostsList(finalSort, typeKey, statusKey, items, type, status, listKey, totalKey);
+                            long total1 = postsMapper.count(type, status);
+                            total.set(total1);
+                            cachePostsList(finalSort, typeKey, statusKey, items, type, status, listKey, totalKey, total1);
                         } catch (Exception e) {
                             log.error("Cache posts list failed after all retries: sort={}, type={}, status={}",
                                     finalSort, typeKey,
@@ -310,7 +312,7 @@ public class PostsServiceImpl implements PostsService {
             }
             PageResult pageResult = PageResult.builder()
                     .rows(items)
-                    .total(total)
+                    .total(total.get())
                     .build();
             return Result.success(pageResult);
         } else {
@@ -900,8 +902,9 @@ public class PostsServiceImpl implements PostsService {
             }
         });
 
+        long commentId= l;
         // 更新完可以选择预热一下
-        return Result.success("评论成功");
+        return Result.success(commentId);
     }
 
     @Override
@@ -991,8 +994,8 @@ public class PostsServiceImpl implements PostsService {
                 log.error("Async flush reply count failed for post: {}", postId, e);
             }
         });
-
-        return Result.success("回复成功");
+        long replyCommentId=l;
+        return Result.success(replyCommentId);
     }
 
     /**

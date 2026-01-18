@@ -24,6 +24,7 @@ import static com.tmd.constants.common.ERROR_CODE;
 
 @Slf4j
 @RestController
+@RequestMapping("/api/user")
 public class UserController {
     @Autowired
     private UserService userService;

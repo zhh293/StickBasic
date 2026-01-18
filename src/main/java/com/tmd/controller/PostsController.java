@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.*;
 import static com.tmd.constants.common.ERROR_CODE;
 
 @RestController
-@RequestMapping("/posts")
+@RequestMapping("/api/posts")
 @Slf4j
 public class PostsController {
     // 帖子列表需配合Redis、Redisson与ES进行高性能查询与索引恢复
@@ -132,7 +132,7 @@ public class PostsController {
         return postsService.openShareLink(token);
     }
     //帖子评论（根评论）
-    @PostMapping("/{postId}/comment")
+    @PostMapping("/{postId}/comments")
     public Result createComment(@PathVariable Long postId,
                                 @RequestBody CommentCreateDTO dto) {
         Long userId = BaseContext.get();

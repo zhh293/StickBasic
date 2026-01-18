@@ -14,7 +14,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 @RestController
-@RequestMapping("/captcha")
+@RequestMapping("/api/captcha")
 @RequiredArgsConstructor
 public class CaptchaController {
     private final StringRedisTemplate stringRedisTemplate;
