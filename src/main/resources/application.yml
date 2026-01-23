@@ -26,12 +26,12 @@ spring:
     port: 5672
   ai:
     openai:
-      api-key:  ${OPENAI_API_KEY:sk-e5zWuv9LGJfOAiwJMqREqqRli8AJ8hc8eU69AW3MxY5sC2cN}
-      base-url: ${OPENAI_BASE_URL:https://api.xty.app}
-      embedding:
-        options:
-          model: text-embedding-v3
-          dimensions: 1024
+      api-key:  ${OPENAI_API_KEY}
+      base-url: https://api.xty.app
+#      embedding:
+#        options:
+#          model: text-embedding-v3
+#          dimensions: 1024
 #jwt
 Bluegod:
   security:
@@ -49,9 +49,10 @@ mybatis:
 sky:
   alioss:
     endpoint: oss-cn-beijing.aliyuncs.com
-    access-key-id: your-access-key-id
-    access-key-secret: your-access-key-secret
-    bucket-name: your-bucket-name
+    access-key-id: ${ALIBABA_CLOUD_ACCESS_KEY_ID}
+    access-key-secret: ${ALIBABA_CLOUD_ACCESS_KEY_SECRET}
+    bucket-name: zhhhandsome
+
 l2cache:
   config:
     # 是否存储空值，默认true，防止缓存穿透

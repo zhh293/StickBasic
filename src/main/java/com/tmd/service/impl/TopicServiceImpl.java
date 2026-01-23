@@ -1,5 +1,6 @@
 package com.tmd.service.impl;
 
+import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
@@ -10,6 +11,7 @@ import com.tmd.publisher.MessageProducer;
 import com.tmd.publisher.TopicModerationMessage;
 import com.tmd.service.TopicService;
 import com.tmd.tools.BaseContext;
+import org.redisson.api.RBloomFilter;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.ai.chat.client.ChatClient;
@@ -19,9 +21,12 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Service
 
@@ -320,8 +325,9 @@ public class TopicServiceImpl implements TopicService {
             Integer size,
             String sort,
             String status) throws InterruptedException {
-        if (topicId == null || topicId <= 0) {
-            return Result.error("话题ID不能为空");
+        RBloomFilter<Integer> postBloom = redissonClient.getBloomFilter("bf:topic:id");
+        if (!postBloom.contains(topicId)) {
+            return Result.error("话题不存在");
         }
         if (page == null || page < 1)
             page = 1;
@@ -329,107 +335,239 @@ public class TopicServiceImpl implements TopicService {
             size = 10;
         if (cn.hutool.core.util.StrUtil.isBlank(sort))
             sort = "latest";
-
         String statusKey = cn.hutool.core.util.StrUtil.isBlank(status) ? "-" : status;
-        String listKey = String.format(TOPIC_POSTS_LIST_KEY_FMT, topicId, statusKey, sort, page, size);
+        String listKey= String.format(TOPIC_POSTS_LIST_KEY_FMT, topicId, statusKey, sort, page, size);
         String totalKey = String.format(TOPIC_POSTS_TOTAL_KEY_FMT, topicId, statusKey, sort);
-
-        // 读缓存
+        //拿缓存
         String cachedListJson = stringRedisTemplate.opsForValue().get(listKey);
-        if (cn.hutool.core.util.StrUtil.isNotBlank(cachedListJson)) {
-            java.util.List<PostListItemVO> rows = cn.hutool.json.JSONUtil
-                    .toList(cn.hutool.json.JSONUtil.parseArray(cachedListJson), PostListItemVO.class);
-            Long total = null;
-            String totalStr = stringRedisTemplate.opsForValue().get(totalKey);
-            if (cn.hutool.core.util.StrUtil.isNotBlank(totalStr)) {
-                try {
-                    total = Long.parseLong(totalStr);
-                } catch (Exception ignore) {
-                }
+        if (StrUtil.isNotBlank(cachedListJson)){
+            List<PostListItemVO> posts = cn.hutool.json.JSONUtil.toList(cachedListJson, PostListItemVO.class);
+            String total= stringRedisTemplate.opsForValue().get(totalKey);
+            Long totalResult;
+            if(StrUtil.isNotBlank(total)){
+                totalResult = Long.parseLong(total);
+            }else{
+                totalResult = postsMapper.countByTopic(Long.valueOf(topicId), status);
+                stringRedisTemplate.opsForValue().set(totalKey, totalResult.toString(), TOPIC_TOTAL_TTL_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
             }
-            if (total == null)
-                total = (long) rows.size();
-            PageResult pageResult = new PageResult(total, rows);
-            return Result.success(pageResult);
+            return Result.success(new PageResult(
+                    totalResult,
+                    posts
+            ));
         }
 
-        // 未命中：尝试加锁，命中锁则同步恢复缓存；无论如何直接查询并返回数据
+//         未命中：尝试加锁，命中锁则同步恢复缓存；无论如何直接查询并返回数据
         String lockKey = "lock:" + listKey;
         org.redisson.api.RLock lock = redissonClient.getLock(lockKey);
         boolean locked = false;
         try {
             locked = lock.tryLock(5, 10, java.util.concurrent.TimeUnit.SECONDS);
         } catch (Exception ignore) {
+            log.error("加锁失败{}", ignore.getMessage());
+            return Result.error("服务器繁忙，请稍后再试");
         }
-
-        final int offset = (page - 1) * size;
-        java.util.List<Post> posts = postsMapper.selectPageByTopic(topicId.longValue(), status, sort, offset, size);
-        // 批量查询该页所有帖子的附件，优先命中缓存，未命中一次性补齐并回写缓存
-        java.util.List<Long> postIdsBatch = posts.stream().map(Post::getId)
-                .collect(java.util.stream.Collectors.toList());
-        java.util.List<Attachment> allAttachments = attachmentService.getAttachmentsByBusinessBatch("post",
-                postIdsBatch);
-        java.util.Map<Long, java.util.List<Attachment>> attMap = (allAttachments == null)
+        if (locked) {
+            try{
+                final int offset= (page - 1) * size;
+                List<Post> posts = postsMapper.selectPageByTopic(Long.valueOf(topicId), status, sort, offset, size);
+                List<Long>postIds=posts.stream().map(Post::getId).toList();
+                List<Attachment> allAttachments = attachmentService.getAttachmentsByBusinessBatch("post", postIds);
+                Map<Long, List<Attachment>> attMap = (allAttachments == null)
                 ? new java.util.HashMap<>()
                 : allAttachments.stream()
                         .filter(a -> a.getBusinessId() != null)
                         .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
-        java.util.List<PostListItemVO> items = new java.util.ArrayList<>();
-        TopicVO topicVO = topicMapper.getTopicById(topicId);
-        String topicName = topicVO != null ? topicVO.getName() : null;
-        for (Post p : posts) {
-            UserProfile profile = userMapper.getProfile(p.getUserId());
-            String username = profile != null ? profile.getUsername() : null;
-            String avatar = profile != null ? profile.getAvatar() : null;
-            java.util.List<Attachment> attachments = attMap.getOrDefault(p.getId(), java.util.Collections.emptyList());
-            java.util.List<AttachmentLite> liteAttachments = new java.util.ArrayList<>();
-            for (Attachment a : attachments) {
-                liteAttachments.add(AttachmentLite.builder()
-                        .fileUrl(a.getFileUrl())
-                        .fileType(a.getFileType())
-                        .fileName(a.getFileName())
-                        .build());
-            }
-            PostListItemVO vo = PostListItemVO.builder()
-                    .id(p.getId())
-                    .title(p.getTitle())
-                    .content(p.getContent())
-                    .userId(p.getUserId())
-                    .authorUsername(username)
-                    .authorAvatar(avatar)
-                    .topicId(p.getTopicId())
-                    .topicName(topicName)
-                    .likeCount(p.getLikeCount())
-                    .commentCount(p.getCommentCount())
-                    .shareCount(p.getShareCount())
-                    .viewCount(p.getViewCount())
-                    .createdAt(p.getCreatedAt())
-                    .updatedAt(p.getUpdatedAt())
-                    .attachments(liteAttachments)
-                    .build();
-            items.add(vo);
-        }
-        long total = postsMapper.countByTopic(topicId.longValue(), status);
-        PageResult pageResult = new PageResult(total, items);
-
-        if (locked) {
-            try {
-                String json = cn.hutool.json.JSONUtil.toJsonStr(items);
-                stringRedisTemplate.opsForValue().set(listKey, json, TOPIC_LIST_TTL_SECONDS,
-                        java.util.concurrent.TimeUnit.SECONDS);
-                stringRedisTemplate.opsForValue().set(totalKey, String.valueOf(total), TOPIC_TOTAL_TTL_SECONDS,
-                        java.util.concurrent.TimeUnit.SECONDS);
-            } catch (Exception e) {
-                log.error("Restore topic:posts cache failed, key={}", listKey, e);
-            } finally {
-                try {
-                    lock.unlock();
-                } catch (Exception ignore) {
+                List<PostListItemVO>items=new ArrayList<>();
+                TopicVO topicById = topicMapper.getTopicById(topicId);
+                String topicName = topicById != null ? topicById.getName() : null;
+                for (Post p : posts){
+                    UserProfile profile = userMapper.getProfile(p.getUserId());
+                    String username = profile != null ? profile.getUsername() : null;
+                    String avatar = profile != null ? profile.getAvatar() : null;
+                    java.util.List<Attachment> attachments = attMap.getOrDefault(p.getId(), java.util.Collections.emptyList());
+                    java.util.List<AttachmentLite> liteAttachments = new java.util.ArrayList<>();
+                    for (Attachment a : attachments) {
+                        liteAttachments.add(AttachmentLite.builder()
+                                .fileUrl(a.getFileUrl())
+                                .fileType(a.getFileType())
+                                .fileName(a.getFileName())
+                                .build());
+                    }
+                    PostListItemVO vo = PostListItemVO.builder()
+                            .id(p.getId())
+                            .title(p.getTitle())
+                            .content(p.getContent())
+                            .userId(p.getUserId())
+                            .authorUsername(username)
+                            .authorAvatar(avatar)
+                            .topicId(p.getTopicId())
+                            .topicName(topicName)
+                            .likeCount(p.getLikeCount())
+                            .commentCount(p.getCommentCount())
+                            .shareCount(p.getShareCount())
+                            .viewCount(p.getViewCount())
+                            .createdAt(p.getCreatedAt())
+                            .updatedAt(p.getUpdatedAt())
+                            .attachments(liteAttachments)
+                            .build();
+                    items.add(vo);
+                }
+                threadPoolConfig.threadPoolExecutor().execute(() -> {
+                    long total=postsMapper.countByTopic(Long.valueOf(topicId), status);
+                    //开始恢复缓存
+                    try {
+                        String json = cn.hutool.json.JSONUtil.toJsonStr(items);
+                        stringRedisTemplate.opsForValue().set(listKey, json, TOPIC_LIST_TTL_SECONDS,
+                                java.util.concurrent.TimeUnit.SECONDS);
+                        stringRedisTemplate.opsForValue().set(totalKey, String.valueOf(total), TOPIC_TOTAL_TTL_SECONDS,
+                                java.util.concurrent.TimeUnit.SECONDS);
+                    }catch (Exception e){
+                        log.error("缓存失败{}", e.getMessage());
+                        return;
+                    }
+                });
+                return Result.success(new PageResult(
+                        (long) posts.size(),
+                        items
+                ));
+            }catch (Exception e){
+                log.error("查询失败{}", e.getMessage());
+                return Result.error("服务器繁忙，请稍后再试");
+            }finally {
+                // 优化点2：释放锁前校验，避免未持有锁时unlock抛异常
+                if (lock.isHeldByCurrentThread()) {
+                    try {
+                        lock.unlock();
+                    } catch (Exception e) {
+                        log.error("释放分布式锁失败", e);
+                    }
                 }
             }
         }
-        return Result.success(pageResult);
+        return Result.success(new PageResult(
+                0L,
+                List.of()
+        ));
     }
+
+
+
+//    @Override
+//    public Result getTopicPosts(Integer topicId,
+//            Integer page,
+//            Integer size,
+//            String sort,
+//            String status) throws InterruptedException {
+//        if (topicId == null || topicId <= 0) {
+//            return Result.error("话题ID不能为空");
+//        }
+//        if (page == null || page < 1)
+//            page = 1;
+//        if (size == null || size < 1)
+//            size = 10;
+//        if (cn.hutool.core.util.StrUtil.isBlank(sort))
+//            sort = "latest";
+//
+//        String statusKey = cn.hutool.core.util.StrUtil.isBlank(status) ? "-" : status;
+//        String listKey = String.format(TOPIC_POSTS_LIST_KEY_FMT, topicId, statusKey, sort, page, size);
+//        String totalKey = String.format(TOPIC_POSTS_TOTAL_KEY_FMT, topicId, statusKey, sort);
+//
+//        // 读缓存
+//        String cachedListJson = stringRedisTemplate.opsForValue().get(listKey);
+//        if (cn.hutool.core.util.StrUtil.isNotBlank(cachedListJson)) {
+//            java.util.List<PostListItemVO> rows = cn.hutool.json.JSONUtil
+//                    .toList(cn.hutool.json.JSONUtil.parseArray(cachedListJson), PostListItemVO.class);
+//            Long total = null;
+//            String totalStr = stringRedisTemplate.opsForValue().get(totalKey);
+//            if (cn.hutool.core.util.StrUtil.isNotBlank(totalStr)) {
+//                try {
+//                    total = Long.parseLong(totalStr);
+//                } catch (Exception ignore) {
+//                }
+//            }
+//            if (total == null)
+//                total = (long) rows.size();
+//            PageResult pageResult = new PageResult(total, rows);
+//            return Result.success(pageResult);
+//        }
+//
+//        // 未命中：尝试加锁，命中锁则同步恢复缓存；无论如何直接查询并返回数据
+//        String lockKey = "lock:" + listKey;
+//        org.redisson.api.RLock lock = redissonClient.getLock(lockKey);
+//        boolean locked = false;
+//        try {
+//            locked = lock.tryLock(5, 10, java.util.concurrent.TimeUnit.SECONDS);
+//        } catch (Exception ignore) {
+//        }
+//
+//        final int offset = (page - 1) * size;
+//        java.util.List<Post> posts = postsMapper.selectPageByTopic(topicId.longValue(), status, sort, offset, size);
+//        // 批量查询该页所有帖子的附件，优先命中缓存，未命中一次性补齐并回写缓存
+//        java.util.List<Long> postIdsBatch = posts.stream().map(Post::getId)
+//                .collect(java.util.stream.Collectors.toList());
+//        java.util.List<Attachment> allAttachments = attachmentService.getAttachmentsByBusinessBatch("post",
+//                postIdsBatch);
+//        java.util.Map<Long, java.util.List<Attachment>> attMap = (allAttachments == null)
+//                ? new java.util.HashMap<>()
+//                : allAttachments.stream()
+//                        .filter(a -> a.getBusinessId() != null)
+//                        .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
+//        java.util.List<PostListItemVO> items = new java.util.ArrayList<>();
+//        TopicVO topicVO = topicMapper.getTopicById(topicId);
+//        String topicName = topicVO != null ? topicVO.getName() : null;
+//        for (Post p : posts) {
+//            UserProfile profile = userMapper.getProfile(p.getUserId());
+//            String username = profile != null ? profile.getUsername() : null;
+//            String avatar = profile != null ? profile.getAvatar() : null;
+//            java.util.List<Attachment> attachments = attMap.getOrDefault(p.getId(), java.util.Collections.emptyList());
+//            java.util.List<AttachmentLite> liteAttachments = new java.util.ArrayList<>();
+//            for (Attachment a : attachments) {
+//                liteAttachments.add(AttachmentLite.builder()
+//                        .fileUrl(a.getFileUrl())
+//                        .fileType(a.getFileType())
+//                        .fileName(a.getFileName())
+//                        .build());
+//            }
+//            PostListItemVO vo = PostListItemVO.builder()
+//                    .id(p.getId())
+//                    .title(p.getTitle())
+//                    .content(p.getContent())
+//                    .userId(p.getUserId())
+//                    .authorUsername(username)
+//                    .authorAvatar(avatar)
+//                    .topicId(p.getTopicId())
+//                    .topicName(topicName)
+//                    .likeCount(p.getLikeCount())
+//                    .commentCount(p.getCommentCount())
+//                    .shareCount(p.getShareCount())
+//                    .viewCount(p.getViewCount())
+//                    .createdAt(p.getCreatedAt())
+//                    .updatedAt(p.getUpdatedAt())
+//                    .attachments(liteAttachments)
+//                    .build();
+//            items.add(vo);
+//        }
+//        long total = postsMapper.countByTopic(topicId.longValue(), status);
+//        PageResult pageResult = new PageResult(total, items);
+//
+//        if (locked) {
+//            try {
+//                String json = cn.hutool.json.JSONUtil.toJsonStr(items);
+//                stringRedisTemplate.opsForValue().set(listKey, json, TOPIC_LIST_TTL_SECONDS,
+//                        java.util.concurrent.TimeUnit.SECONDS);
+//                stringRedisTemplate.opsForValue().set(totalKey, String.valueOf(total), TOPIC_TOTAL_TTL_SECONDS,
+//                        java.util.concurrent.TimeUnit.SECONDS);
+//            } catch (Exception e) {
+//                log.error("Restore topic:posts cache failed, key={}", listKey, e);
+//            } finally {
+//                try {
+//                    lock.unlock();
+//                } catch (Exception ignore) {
+//                }
+//            }
+//        }
+//        return Result.success(pageResult);
+//    }
 
     /**
      * 从 OSS URL 中提取 fileId (objectKey)

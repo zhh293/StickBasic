@@ -13,8 +13,8 @@ import java.time.LocalDate;
 @Data
 public class PStick {
     private Long id;
-    private Long UserId;
-    private Long StickId;
+    private Long userId;
+    private Long stickId;
     private String name;
     private String content;
     private Integer spirits;

@@ -67,9 +67,10 @@ public class UserController {
             }
             stringRedisTemplate.delete(key);
             log.info("用户登录成功:{}", userData.getUsername());
-            return Result.success(userData.getToken());
+            return Result.success(userData);
         }
         log.info("用户登录失败:{},{}", userData.getUsername(),userData.getPassword());
+        stringRedisTemplate.delete("captcha:"+captchaId);
         return Result.error("用户名或密码错误");
     }
     @GetMapping("/user/profile")

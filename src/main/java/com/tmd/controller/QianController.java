@@ -14,10 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.util.MimeType;
 import org.springframework.util.MimeTypeUtils;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.chrono.MinguoEra;
@@ -36,13 +33,17 @@ public class QianController {
     @Autowired
     @Qualifier("testWordChatClient")
     private ChatClient testWordChatClient;
-
-    @Autowired
-    private VectorStore vectorStore;
-    @PostMapping("/generate")
-    public Result generate(@RequestParam MultipartFile  file) {
+//
+//    @Autowired
+//    private VectorStore vectorStore;
+    
+    @PostMapping(value = "/generate", consumes = "multipart/form-data")
+    public Result generate(@RequestParam("file") MultipartFile file) {
         log.info("generate");
         //检查file是否是 图片
+        if (file == null || file.isEmpty()) {
+            return Result.error("请上传图片文件");
+        }
         String originalFilename = file.getOriginalFilename();
         if(StrUtil.isBlank(originalFilename)){
             return Result.error("请上传图片文件");
@@ -50,33 +51,64 @@ public class QianController {
         if (!originalFilename.endsWith(".png") && !originalFilename.endsWith(".jpg") && !originalFilename.endsWith(".jpeg")) {
             return Result.error("请上传图片文件");
         }
-        String result=DistinguishChatClient.prompt()
-                .user(u->u.text("请严格按照系统提示词进行图片识别")
-                        .media(getType(originalFilename),file.getResource()))
-                .call()
-                .content();
+        
+        String result = "";
+        try {
+            result = DistinguishChatClient.prompt()
+                    .user(u->u.text("请严格按照系统提示词进行图片识别")
+                            .media(getType(originalFilename),file.getResource()))
+                    .call()
+                    .content();
+        } catch (Exception e) {
+            log.error("图片识别过程中发生异常: ", e);
+            return Result.error("图片识别失败: " + e.getMessage());
+        }
+        
         if(StrUtil.isBlank(result)){
             return Result.error("图片识别失败");
         }
         if (result.equals("FAILED")){
             return Result.error("图片识别失败");
         }
+
+        log.info("图片识别结果: {}", result);
         //上面交给一个AI即可，下面的知识库挂载和结构输出放在一个AI中
-        QianVO result2=testWordChatClient.prompt()
-                .user("用户输入的字为"+result)
-                .advisors(new QuestionAnswerAdvisor(vectorStore, SearchRequest.builder()
-                        .similarityThreshold(0.7)
-                        .topK(10)
-                        .query(result)
-                        .build()
-                ))
-                .call()
-                .entity(QianVO.class);
+        QianVO result2;
+        try {
+            result2 = testWordChatClient.prompt()
+                    .user("用户输入的字为"+result)
+//                    .advisors(new QuestionAnswerAdvisor(vectorStore, SearchRequest.builder()
+//                            .similarityThreshold(0.7)
+//                            .topK(10)
+//                            .query(result)
+//                            .build()
+//                    ))
+                    .call()
+                    .entity(QianVO.class);
+            log.info("知识库查询结果: {}", result2);
+        } catch (Exception e) {
+            log.error("知识库查询过程中发生异常: ", e);
+            return Result.error("知识库查询失败: " + e.getMessage());
+        }
         return Result.success(result2);
     }
     private MimeType getType(String originalFilename) {
-        String type = originalFilename.substring(originalFilename.lastIndexOf(".") + 1);
-        String lowerCase = type.toLowerCase();
-        return MimeTypeUtils.parseMimeType(lowerCase);
+        String extension = originalFilename.substring(originalFilename.lastIndexOf(".") + 1).toLowerCase();
+        switch (extension) {
+            case "png":
+                return MimeType.valueOf("image/png");
+            case "jpg":
+                return MimeType.valueOf("image/jpeg");
+            case "jpeg":
+                return MimeType.valueOf("image/jpeg");
+            case "gif":
+                return MimeType.valueOf("image/gif");
+            case "bmp":
+                return MimeType.valueOf("image/bmp");
+            case "webp":
+                return MimeType.valueOf("image/webp");
+            default:
+                return MimeType.valueOf("application/octet-stream");
+        }
     }
 }

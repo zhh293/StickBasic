@@ -6,6 +6,7 @@ import com.tmd.entity.dto.PageResult;
 import com.tmd.entity.dto.Result;
 import com.tmd.entity.po.PStickQueryParam;
 import com.tmd.service.PStickService;
+import com.tmd.tools.BaseContext;
 import com.tmd.tools.SimpleTools;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,10 +35,11 @@ public class PStickController {
     private StringRedisTemplate redisTemplate;
 
     @GetMapping
-    public Result getPSticks(PStickQueryParam pStickQueryParam, @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization )
+    public Result getPSticks(PStickQueryParam pStickQueryParam, @RequestHeader("authentication") String authorization )
     {
         log.info("查询请求参数：{}", pStickQueryParam.toString());
-        var uid = SimpleTools.checkToken(authorization);
+        long uid;
+        uid= BaseContext.get();
         if (uid != ERROR_CODE){
             String s = redisTemplate.opsForValue().get("PStick:" + uid);
             if(StringUtils.hasText(s)){
@@ -59,12 +61,13 @@ public class PStickController {
     }
 
     @PutMapping("/{pTileId}")
-    public Result updatePName(@PathVariable Long pTileId, @RequestBody Map<String, String> requestBody, @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization )
+    public Result updatePName(@PathVariable Long pTileId, @RequestBody Map<String, String> requestBody, @RequestHeader("authentication") String authorization )
     {
         String content = requestBody.get("content");
         String name = requestBody.get("name");
         log.info("正在更改姓名：{},正在更改内容：{}", content, name);
-        var uid = SimpleTools.checkToken(authorization);
+        long uid;
+        uid= BaseContext.get();
         if (uid != ERROR_CODE){
             if(pStickService.updatePTile(pTileId, content, name)) {
                 PStickVO pStickVO = pStickService.getPTile(pTileId);
@@ -76,9 +79,10 @@ public class PStickController {
     }
     
     @DeleteMapping("/{pTileId}")
-    public Result deletePTile(@PathVariable Long pTileId, @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization) {
+    public Result deletePTile(@PathVariable Long pTileId, @RequestHeader("authentication") String authorization) {
         log.info("正在删除人物磁贴，ID：{}", pTileId);
-        var uid = SimpleTools.checkToken(authorization);
+        long uid;
+        uid= BaseContext.get();
         if (uid != ERROR_CODE) {
             if (pStickService.deletePTile(pTileId)) {
                 return Result.success("删除成功");

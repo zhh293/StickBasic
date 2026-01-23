@@ -27,7 +27,7 @@ public class PostsController {
     public Result getPosts(@RequestParam(defaultValue = "1") Integer page,
                            @RequestParam(defaultValue = "10") Integer size,
                            @RequestParam(required = false) String type,
-                           @RequestParam(required = false, defaultValue = "normal") String status,
+                           @RequestParam(required = false, defaultValue = "published") String status,
                            @RequestParam(required = false, defaultValue = "latest") String sort) throws InterruptedException {
         log.info("用户正在获取帖子列表: page={}, size={}, type={}, status={}, sort={}",
                 page, size, type, status, sort);
@@ -47,7 +47,7 @@ public class PostsController {
     @GetMapping("/scroll")
     public Result getPostsScroll(@RequestParam(defaultValue = "10") Integer size,
                                  @RequestParam(required = false) String type,
-                                 @RequestParam(required = false, defaultValue = "normal") String status,
+                                 @RequestParam(required = false, defaultValue = "published") String status,
                                  @RequestParam(required = false, defaultValue = "latest") String sort,
                                  @RequestParam(required = false) Long max,
                                  @RequestParam(defaultValue = "0") Integer offset) throws InterruptedException {

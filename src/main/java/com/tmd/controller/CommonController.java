@@ -6,6 +6,7 @@ import com.tmd.entity.dto.FileUploadResponse;
 import com.tmd.entity.dto.Result;
 import com.tmd.service.AttachmentService;
 import com.tmd.tools.BaseContext;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -59,6 +60,12 @@ public class CommonController {
      * @param fileType 文件类型：image（图像）、video（视频/音频）
      * @return 文件上传结果
      */
+//    "fileId": "image/2026/01/22/7192d39817b84cae845daa0413f4f258.jpg",
+//            "fileUrl": "https://zhhhandsome.oss-cn-beijing.aliyuncs.com/image/2026/01/22/7192d39817b84cae845daa0413f4f258.jpg",
+//            "fileName": "1.jpg",
+//            "fileSize": 221557,
+//            "fileType": "image",
+//            "uploadTime": "2026-01-22T12:42:18.575411400Z"
     @PostMapping("/upload")
     public Result uploadFile(
             @RequestParam("file") MultipartFile file,
@@ -80,15 +87,15 @@ public class CommonController {
                 return Result.error("文件大小不能超过 100MB");
             }
 
-            // 3. 如果是图片类型，进行AI审核（仅对小文件进行审核，大文件跳过以避免内存占用）
-            if ("image".equals(fileType) && fileSize <= IMAGE_MODERATION_SIZE_THRESHOLD) {
-                boolean moderationPassed = performImageModeration(file);
-                if (!moderationPassed) {
-                    return Result.error("图片内容审核未通过，包含违规内容");
-                }
-            } else if ("image".equals(fileType) && fileSize > IMAGE_MODERATION_SIZE_THRESHOLD) {
-                log.warn("图片文件过大（{}MB），跳过AI审核以避免内存占用", fileSize / 1024 / 1024);
-            }
+//            // 3. 如果是图片类型，进行AI审核（仅对小文件进行审核，大文件跳过以避免内存占用）
+//            if ("image".equals(fileType) && fileSize <= IMAGE_MODERATION_SIZE_THRESHOLD) {
+//                boolean moderationPassed = performImageModeration(file);
+//                if (!moderationPassed) {
+//                    return Result.error("图片内容审核未通过，包含违规内容");
+//                }
+//            } else if ("image".equals(fileType) && fileSize > IMAGE_MODERATION_SIZE_THRESHOLD) {
+//                log.warn("图片文件过大（{}MB），跳过AI审核以避免内存占用", fileSize / 1024 / 1024);
+//            }
 
             // 4. 生成唯一的 objectKey
             String originalFilename = file.getOriginalFilename();
@@ -104,10 +111,10 @@ public class CommonController {
                 fileUrl = aliOssUtil.upload(inputStream, objectKey);
             }
 
-            // 6. 如果是图片，将图片信息存储到向量数据库（可选，用于后续检索）
-            if ("image".equals(fileType)) {
-                storeImageToVectorStore(file, objectKey, fileUrl);
-            }
+//            // 6. 如果是图片，将图片信息存储到向量数据库（可选，用于后续检索）
+//            if ("image".equals(fileType)) {
+//                storeImageToVectorStore(file, objectKey, fileUrl);
+//            }
 
             // 7. 构建响应（包含上传时间）
             String uploadTime = LocalDateTime.now().atOffset(ZoneOffset.UTC).toString();
@@ -135,9 +142,19 @@ public class CommonController {
      * @param fileId objectKey（文件ID）
      * @return 文件信息
      */
-    @GetMapping("/files/{fileId}")
-    public Result getFileInfo(@PathVariable("fileId") String fileId) {
+    @GetMapping(value = "/files/**")
+    public Result getFileInfo(HttpServletRequest request) {
         try {
+            // 从请求URI中提取fileId
+            String requestURI = request.getRequestURI();
+            String prefix = "/common/files/";
+            String fileId;
+            if (requestURI.contains(prefix)) {
+                fileId = requestURI.substring(requestURI.indexOf(prefix) + prefix.length());
+            } else {
+                return Result.error("无效的请求路径");
+            }
+
             if (fileId == null || fileId.trim().isEmpty()) {
                 return Result.error("文件ID不能为空");
             }
@@ -160,19 +177,62 @@ public class CommonController {
             log.info("获取文件信息成功: fileId={}", fileId);
             return Result.success(fileInfo);
         } catch (Exception e) {
-            log.error("获取文件信息失败: fileId={}", fileId, e);
+            log.error("获取文件信息失败", e);
             return Result.error("获取文件信息失败: " + e.getMessage());
         }
     }
 
     /**
-     * 文件删除接口
+     * 文件删除接口(数据库中没有存在这些文件)
+     *
+     * @param fileId objectKey
+     * @return 删除结果
+     */
+    @DeleteMapping("/delete/no/**")
+    public Result deleteFileNoDataBase(HttpServletRequest  request) {
+        String requestURI = request.getRequestURI();
+        String prefix = "/common/delete/no";
+        String fileId;
+        if (requestURI.contains(prefix)) {
+            fileId = requestURI.substring(requestURI.indexOf(prefix) + prefix.length());
+        } else {
+            return Result.error("无效的请求路径");
+        }
+        try {
+            if (fileId == null || fileId.trim().isEmpty()) {
+                return Result.error("文件ID不能为空");
+            }
+
+            boolean delete = aliOssUtil.delete(fileId);
+            if (delete){
+                return Result.success("文件删除成功: " + fileId);
+            }else{
+                return Result.error("文件删除失败: " + fileId);
+            }
+        } catch (Exception e) {
+            log.error("文件删除失败: fileId={}", fileId, e);
+            return Result.error("文件删除失败: " + e.getMessage());
+        }
+    }
+
+
+
+    /**
+     * 文件删除接口(数据库中已经存在了这些文件)
      * 
      * @param fileId objectKey
      * @return 删除结果
      */
-    @DeleteMapping("/delete/{fileId}")
-    public Result deleteFile(@PathVariable("fileId") String fileId) {
+    @DeleteMapping("/delete/**")
+    public Result deleteFile(HttpServletRequest  request) {
+        String requestURI = request.getRequestURI();
+        String prefix = "/common/delete/";
+        String fileId;
+        if (requestURI.contains(prefix)) {
+            fileId = requestURI.substring(requestURI.indexOf(prefix) + prefix.length());
+        } else {
+            return Result.error("无效的请求路径");
+        }
         try {
             if (fileId == null || fileId.trim().isEmpty()) {
                 return Result.error("文件ID不能为空");
@@ -328,16 +388,16 @@ public class CommonController {
                         continue;
                     }
 
-                    // 如果是图片类型，进行AI审核（仅对小文件进行审核）
-                    if ("image".equals(fileType) && fileSize <= IMAGE_MODERATION_SIZE_THRESHOLD) {
-                        boolean moderationPassed = performImageModeration(file);
-                        if (!moderationPassed) {
-                            errors.add("第 " + (i + 1) + " 个图片审核未通过");
-                            continue;
-                        }
-                    } else if ("image".equals(fileType) && fileSize > IMAGE_MODERATION_SIZE_THRESHOLD) {
-                        log.warn("第 {} 个图片文件过大（{}MB），跳过AI审核", i + 1, fileSize / 1024 / 1024);
-                    }
+//                    // 如果是图片类型，进行AI审核（仅对小文件进行审核）
+//                    if ("image".equals(fileType) && fileSize <= IMAGE_MODERATION_SIZE_THRESHOLD) {
+//                        boolean moderationPassed = performImageModeration(file);
+//                        if (!moderationPassed) {
+//                            errors.add("第 " + (i + 1) + " 个图片审核未通过");
+//                            continue;
+//                        }
+//                    } else if ("image".equals(fileType) && fileSize > IMAGE_MODERATION_SIZE_THRESHOLD) {
+//                        log.warn("第 {} 个图片文件过大（{}MB），跳过AI审核", i + 1, fileSize / 1024 / 1024);
+//                    }
 
                     // 生成唯一的 objectKey
                     String originalFilename = file.getOriginalFilename();

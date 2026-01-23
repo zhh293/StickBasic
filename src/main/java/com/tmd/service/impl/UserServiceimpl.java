@@ -75,6 +75,8 @@ public class UserServiceimpl implements UserService, UserDetailsService {
         redisCache.setCacheObject("login:"+jwt,loginUser);
         UserData user = loginUser.getUser();
         user.setToken(jwt);
+        user.setId(user.getId());
+        log.info("用户登陆成功{}",user);
         return user;
     }
 

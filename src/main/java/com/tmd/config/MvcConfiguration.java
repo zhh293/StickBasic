@@ -8,10 +8,9 @@ import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
-import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
-import org.springframework.web.servlet.config.annotation.CorsRegistry;
-import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
-import org.springframework.web.servlet.config.annotation.WebMvcConfigurationSupport;
+import org.springframework.util.AntPathMatcher;
+import org.springframework.util.PathMatcher;
+import org.springframework.web.servlet.config.annotation.*;
 
 import java.util.List;
 
@@ -46,6 +45,20 @@ public class MvcConfiguration extends WebMvcConfigurationSupport {
         // 初始化线程池
         executor.initialize();
         return executor;
+    }
+    @Bean
+    public PathMatcher pathMatcher() {
+        AntPathMatcher pathMatcher = new AntPathMatcher();
+        pathMatcher.setTrimTokens(false); // 不修剪token，允许路径变量含/
+        return pathMatcher;
+    }
+
+    @Override
+    public void configurePathMatch(PathMatchConfigurer configurer) {
+        // 显式指定使用AntPathMatcher
+        configurer.setPathMatcher(pathMatcher());
+        // 关闭后缀匹配（避免.jpg被当作扩展名截断）
+        configurer.setUseSuffixPatternMatch(false);
     }
 
     /**

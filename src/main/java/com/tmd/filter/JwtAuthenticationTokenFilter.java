@@ -45,6 +45,12 @@ public class JwtAuthenticationTokenFilter extends OncePerRequestFilter {
             filterChain.doFilter(httpServletRequest, httpServletResponse);
             return;
         }
+        // 检查loginuser是否为null，如果是null则表示用户未登录
+        if(loginuser == null){
+            httpServletResponse.setStatus(401);
+            httpServletResponse.sendRedirect("http://localhost:5173/login");//重定向到登陆界面
+            throw new RuntimeException("用户未登录");
+        }
         //把这个jsonobject转换成loginuser
         LoginUser cacheObject = JSONObject.parseObject(loginuser.toString(), LoginUser.class);
         if(cacheObject == null){

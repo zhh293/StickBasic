@@ -1,13 +1,40 @@
 package com.tmd;
 
+import cn.hutool.core.io.FileUtil;
+import com.alibaba.fastjson2.JSONObject;
+import com.volcengine.ark.runtime.model.images.generation.GenerateImagesRequest;
+import com.volcengine.ark.runtime.model.images.generation.ImagesResponse;
+import com.volcengine.ark.runtime.model.images.generation.ResponseFormat;
+import com.volcengine.ark.runtime.service.ArkService;
+import lombok.extern.slf4j.Slf4j;
+import okhttp3.ConnectionPool;
+import okhttp3.Dispatcher;
+import org.apache.commons.io.FileUtils;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.util.EntityUtils;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mock;
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.util.concurrent.TimeUnit;
 
 //import java.util.Arrays;
 //import java.util.PriorityQueue;
 
-
+@Slf4j
 class BasicBackApplicationTests {
     @Test
     public void getWordInfo(){
@@ -140,6 +167,109 @@ class BasicBackApplicationTests {
             System.out.println("请求过程中出现异常：" + e.getMessage());
         }
     }
+
+    @Test
+    public void createImage() throws URISyntaxException, IOException {
+        String apiKey = System.getenv("89b3eab2-288e-4872-8bb2-fbee9cebe399");
+        ConnectionPool connectionPool = new ConnectionPool(5, 1, TimeUnit.SECONDS);
+        Dispatcher dispatcher = new Dispatcher();
+        ArkService service = ArkService.builder()
+                .baseUrl("https://ark.cn-beijing.volces.com/api/v3") // The base URL for model invocation .
+                .dispatcher(dispatcher)
+                .connectionPool(connectionPool)
+                .apiKey("89b3eab2-288e-4872-8bb2-fbee9cebe399")
+                .build();
+        //提示词要根据天气和时间生成
+        //需要一个天气模型调用
+
+        String weather=getNowWeather();
+
+        GenerateImagesRequest generateRequest = GenerateImagesRequest.builder()
+                .model("doubao-seedream-4-0-250828") //Replace with Model ID .
+                .prompt("""
+                        
+                            今日书签：一个充满诗意与美感的场景，根据当前天气动态生成。
+                            画面中心是一本打开的日记本或书籍，页面上隐约可见“Today is a good day”字样。
+                            背景融合自然元素（如阳光、雨滴、雪花、云朵）与室内温馨氛围（如台灯、咖啡杯、壁炉），营造出宁静而富有情感的画面。
+                            风格：水彩插画 + 写实光影，色彩柔和且层次丰富，强调对比与和谐。
+                            光影：自然光源为主，突出明暗过渡，增强立体感。
+                            细节：纸张纹理清晰，墨迹微干，周围有小物件点缀（蝴蝶、松果、书签等）。
+                            整体氛围：温暖、治愈、适合阅读与思考。
+                        
+                        
+                        """+ """
+                        下面是今天天气的相关描述
+                        """+weather)
+                .sequentialImageGeneration("disabled")
+                .responseFormat(ResponseFormat.Url)
+                .stream(false)
+                .watermark(true)
+                .build();
+        ImagesResponse imagesResponse = service.generateImages(generateRequest);
+        log.info("生成图片成功: {}", imagesResponse);
+        byte[] bytes = downloadImage(imagesResponse.getData().get(0).getUrl());
+//        下载到当前项目根目录
+        FileUtils.writeByteArrayToFile(new File("E:\\BasicBack\\src\\main\\resources\\image.png"), bytes);
+        System.out.println(imagesResponse.getData().get(0).getUrl());
+    }
+
+    private String getNowWeather() throws URISyntaxException {
+        //yiketianqi的APPID为26182893
+        //一刻天气的APPSecret为S5vqX2pN
+        CloseableHttpClient httpClient = HttpClients.createDefault();
+        HttpGet httpGet = new HttpGet();
+        String baseUrl="http://gfeljm.tianqiapi.com/api";
+        URIBuilder uriBuilder = new URIBuilder(baseUrl);
+        uriBuilder.setParameter("appid", "26182893");
+        uriBuilder.setParameter("appsecret", "S5vqX2pN");
+        uriBuilder.setParameter("version", "v63");
+        httpGet.setURI(uriBuilder.build());
+        try (CloseableHttpResponse response = httpClient.execute(httpGet)) {
+            String responseBody = EntityUtils.toString(response.getEntity());
+            JSONObject jsonObject = JSONObject.parseObject(responseBody);
+            String weather = jsonObject.getString("wea");
+            String temperature = jsonObject.getString("tem");
+            String wind = jsonObject.getString("win");
+            String air_tips=jsonObject.getString("air_tips");
+
+            StringBuilder stringBuilder = new StringBuilder();
+            //天气的所有描述
+            stringBuilder.append("天气：").append(weather).append("\n");
+            stringBuilder.append("温度：").append(temperature).append("\n");
+            stringBuilder.append("风向：").append(wind).append("\n");
+            stringBuilder.append("空气质量提示：").append(air_tips).append("\n");
+            return stringBuilder.toString();
+        } catch (Exception e) {
+            log.error("获取当前天气失败", e);
+            return "晴";
+        }
+    }
+    private byte[] downloadImage(String imageUrl) {
+        try {
+            URL url = new URL(imageUrl);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(10000);
+            connection.setInstanceFollowRedirects(true);
+
+            int responseCode = connection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                try (InputStream in = connection.getInputStream()) {
+                    return in.readAllBytes();
+                }
+            } else {
+                log.error("下载图片失败，HTTP状态码: {}", responseCode);
+            }
+        } catch (Exception e) {
+            log.error("下载图片异常: {}", e.getMessage(), e);
+        }
+        return null;
+    }
+
+    @Mock
+    @Qualifier("testWordChatClient")
+    private ChatClient chatClient;
 //    /**
 //     * 图的顶点数量
 //     */

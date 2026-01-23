@@ -229,6 +229,7 @@ public class AttachmentServiceImpl implements AttachmentService {
             return attachments;
         }
 
+        log.error("getAttachmentsByBusiness方法从Redis缓存未命中，开始查询业务附件列表: businessType={}, businessId={}", businessType, businessId);
         // 缓存未命中，查 MySQL
         attachments = attachmentMapper.selectByBusiness(businessType, businessId);
         if (attachments != null && !attachments.isEmpty()) {
@@ -244,7 +245,7 @@ public class AttachmentServiceImpl implements AttachmentService {
                 String cacheKeyByFileId = CACHE_KEY_PREFIX_FILE_ID + attachment.getFileId();
                 redisCache.setCacheObject(cacheKeyByFileId, attachment, CACHE_EXPIRE_DAYS, TimeUnit.DAYS);
             }
-            log.debug("从MySQL获取业务附件列表并写入缓存: businessType={}, businessId={}, count={}",
+            log.info("从MySQL获取业务附件列表并写入缓存: businessType={}, businessId={}, count={}",
                     businessType, businessId, attachments.size());
         }
         return attachments != null ? attachments : new ArrayList<>();
@@ -262,6 +263,7 @@ public class AttachmentServiceImpl implements AttachmentService {
                 .distinct()
                 .collect(java.util.stream.Collectors.toList());
 
+        log.error("第一部开始查询");
         // 先尝试从缓存读取各 businessId 的附件列表
         java.util.List<Attachment> combined = new java.util.ArrayList<>();
         java.util.List<Long> missed = new java.util.ArrayList<>();
@@ -269,21 +271,26 @@ public class AttachmentServiceImpl implements AttachmentService {
             String cacheKey = CACHE_KEY_PREFIX_BUSINESS + businessType + ":" + bid;
             java.util.List<Attachment> cached = redisCache.getCacheList(cacheKey);
             // 注意：即便缓存是空列表，也视为命中，避免穿透
-            if (cached != null) {
+            if (cached != null && !cached.isEmpty()) {
                 combined.addAll(cached);
             } else {
                 missed.add(bid);
             }
         }
 
+        log.error("getAttachmentsByBusinessBatch方法从Redis缓存未命中，开始查询业务附件列表: businessType={}, businessIds={}", businessType, businessIds);
         // 对缓存未命中的 businessId，一次性查库并回填缓存
         if (!missed.isEmpty()) {
             java.util.List<Attachment> fetched = attachmentMapper.selectByBusinessIds(businessType, missed);
+            log.error("从MySQL获取业务附件列表: businessType={}, businessIds={}",
+                    businessType, missed);
             if (fetched != null && !fetched.isEmpty()) {
                 java.util.Map<Long, java.util.List<Attachment>> grouped = fetched.stream()
                         .filter(a -> a.getBusinessId() != null)
                         .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
+                log.error("归类完毕之后帖子与图片关系为{}",grouped);
                 for (Long bid : missed) {
+                    log.error("开始为业务ID{}的附件列表写入缓存",bid);
                     java.util.List<Attachment> group = grouped.getOrDefault(bid, new java.util.ArrayList<>());
                     String cacheKey = CACHE_KEY_PREFIX_BUSINESS + businessType + ":" + bid;
                     try {
@@ -295,6 +302,8 @@ public class AttachmentServiceImpl implements AttachmentService {
                 }
             } else {
                 // 防止穿透：为所有 missed 写入空列表缓存（较短过期）
+                log.error("getAttachmentsByBusinessBatch方法从MySQL未命中，写入空列表缓存: businessType={}, businessIds={}",
+                        businessType, missed);
                 for (Long bid : missed) {
                     String cacheKey = CACHE_KEY_PREFIX_BUSINESS + businessType + ":" + bid;
                     try {
@@ -304,6 +313,7 @@ public class AttachmentServiceImpl implements AttachmentService {
                 }
             }
         }
+        log.error("getAttachmentsByBusinessBatch方法最后要返回了:");
 
         return combined;
     }

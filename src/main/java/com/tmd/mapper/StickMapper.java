@@ -10,7 +10,7 @@ import java.util.List;
 public interface StickMapper {
     List<StickVO> stickList( StickQueryParam stickQueryParam);
 
-    @Insert("insert into sticks(user_id,content) values(#{uid},#{stickVO.content})")
+    @Insert("insert into sticks(user_id,content,created_at,updated_at) values(#{uid},#{stickVO.content},#{stickVO.createdAt},#{stickVO.updatedAt})")
     @Options(useGeneratedKeys = true, keyProperty = "stickVO.id", keyColumn = "id")
     long addTile(StickVO stickVO, Long uid);
 

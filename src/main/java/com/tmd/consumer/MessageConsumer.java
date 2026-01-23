@@ -193,6 +193,7 @@ public class MessageConsumer {
                         .content();
                 log.info(response);
                 if (!webSocketServer.Open(message.getId())) {
+                    channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
                     throw new RuntimeException("用户未连接websocket");
                 }
                 if (message.getId() != null) {

@@ -2,6 +2,7 @@ package com.tmd.controller;
 
 import com.tmd.entity.dto.Result;
 import com.tmd.service.FuncService;
+import com.tmd.tools.BaseContext;
 import com.tmd.tools.SimpleTools;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,9 +25,12 @@ public class FuncController {
     private FuncService funcService;
 
     @GetMapping("/saying")
-    public Result saying(@RequestHeader(HttpHeaders.AUTHORIZATION) String authorization ) {
+    public Result saying(@RequestHeader("authentication") String authorization ) {
         log.info("用户正在获取每日一句");
-        var uid = SimpleTools.checkToken(authorization);
+        log.info("用户授权信息：{}", authorization);
+        long uid;
+        uid= BaseContext.get();
+        log.info("用户ID：{}", uid);
         if (uid != ERROR_CODE){
             return Result.success(funcService.saying());
         }

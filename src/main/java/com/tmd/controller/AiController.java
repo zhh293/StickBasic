@@ -10,6 +10,7 @@ import com.tmd.repository.FileRepository;
 import com.tmd.service.AiService;
 import com.tmd.service.PStickService;
 import com.tmd.service.StickService;
+import com.tmd.tools.BaseContext;
 import com.tmd.tools.SimpleTools;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -70,9 +71,10 @@ public class AiController {
     private MessageProducer messageProducer;
     private boolean[]isRoutingKey = {true,false};
     @GetMapping(value = "/summary")
-    public Result summaryai(@RequestParam List<Long> stickIds, @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization){
+    public Result summaryai(@RequestParam List<Long> stickIds, @RequestHeader("authentication") String authorization){
         log.info("用户尝试调用Ai总结磁贴分析");
-        var uid = SimpleTools.checkToken(authorization);
+        long uid;
+        uid= BaseContext.get();
         if (uid != ERROR_CODE){
             List<String> contents = stickIds.stream().map(sid -> stickService.getTile(sid).getContent()).toList();
             //请求模型
@@ -81,16 +83,17 @@ public class AiController {
             UserContent userContent = new UserContent();
             userContent.setUserId(uid);
             userContent.setContents(contents);
-            messageProducer.sendDirectMessage(userContent,isRoutingKey[random.nextInt(2)]);
+            messageProducer.sendDirectMessage(userContent,isRoutingKey[0]);
             return Result.success("正在后台处理，请稍后查看结果");
         }
         return Result.error("验证失败,非法访问");
     }
 
     @GetMapping(value = "/chat", produces = "text/html;charset=utf-8")
-    public Flux<String> chatai(String content,String chatId, @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization){
+    public Flux<String> chatai(String content,String chatId, @RequestHeader("authentication") String authorization){
         log.info("用户尝试调用Ai对话功能");
-        var uid = SimpleTools.checkToken(authorization);
+        long uid;
+        uid= BaseContext.get();
         if (uid != ERROR_CODE){
             log.info("用户正在调用Ai对话功能");
             StickQueryParam stickQueryParam = new StickQueryParam();
@@ -106,9 +109,10 @@ public class AiController {
     }
 
     @GetMapping(value = "/story")
-    public Result storyai(@RequestParam List<Long> pstickIds, @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization){
+    public Result storyai(@RequestParam List<Long> pstickIds, @RequestHeader("authentication") String authorization){
         log.info("用户正在调用Ai总结人物磁贴");
-        var uid = SimpleTools.checkToken(authorization);
+        long uid;
+        uid= BaseContext.get();
         log.info(String.valueOf(uid));
         if (uid != ERROR_CODE){
             List<String> contents = pstickIds.stream().map(sid -> pStickService.getPTile(sid).getContent()).toList();
@@ -125,9 +129,10 @@ public class AiController {
         return Result.error("验证失败,非法访问");
     }
     @GetMapping("/stick2pstick")
-    public Result stick2pstick(Long sid, @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization ){
+    public Result stick2pstick(Long sid, @RequestHeader("authentication") String authorization ){
         log.info("用户正在调用Ai将磁贴归纳到人物中");
-        var uid = SimpleTools.checkToken(authorization);
+        long uid;
+        uid= BaseContext.get();
         if (uid != ERROR_CODE){
             StickVO stickVO = stickService.getTile(sid);
 //            log.info(stickVO.toString());

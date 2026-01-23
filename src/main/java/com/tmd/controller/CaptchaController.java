@@ -31,6 +31,7 @@ public class CaptchaController {
 
         //设置响应头·
         response.setHeader("Captcha-Id", uuid);
+        response.setHeader("Access-Control-Expose-Headers", "Captcha-Id");
         response.setContentType("image/png");
         try {
             captcha.out(response.getOutputStream());

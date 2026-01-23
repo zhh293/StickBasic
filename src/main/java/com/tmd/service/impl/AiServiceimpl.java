@@ -34,6 +34,7 @@ public class AiServiceimpl implements AiService {
         if (rows != null) {
             for (int i = 0; i < rows.size(); i++) {
                 JSONObject r = rows.getJSONObject(i);
+                log.info("JSONObject{}", r);
                 PStick pStick = new PStick();
                 pStick.setUserId(uid);
                 pStick.setStickId(sid);

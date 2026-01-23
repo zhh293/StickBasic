@@ -11,12 +11,12 @@ import java.net.http.HttpClient;
 @Component
 public class NeedTools {
 
-    @Tool(name = "获取当前时间")
+    @Tool(name = "get_current_time")
     public String getTime(){
         return "现在时间是：" + java.time.LocalDateTime.now();
     }
 
-    @Tool(name = "供联网搜索测字相关方法")
+    @Tool(name = "search_word_info_online")
     public String getWordInfo(@ToolParam(description = "请输入一个字，切记只能是一个字，不要多传，也不要传各种空白符号") String word){
         // 验证输入是否为单个字符
         if (word == null || word.trim().length() != 1) {

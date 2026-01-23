@@ -109,7 +109,7 @@ public class PostsServiceImpl implements PostsService {
      * 缓存帖子列表到Redis，带有重试机制
      */
     public void cachePostsList(String sort, String typeKey, String statusKey, List<PostListItemVO> items,
-            String type, String status, String listKey, String totalKey,long total) {
+            String type, String status, String listKey, String totalKey, long total) {
         // 使用手动重试机制替代 @Retryable 注解
         int maxAttempts = 3;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -176,6 +176,7 @@ public class PostsServiceImpl implements PostsService {
         }
         List<PostListItemVO> items = new ArrayList<>();
         AtomicLong total = new AtomicLong();
+        log.info("为什么不在getPosts方法里面打印");
         // 缓存未命中，尝试加锁并异步恢复缓存；返回提示
         String lockKey = "redisLock:" + listKey;
         boolean locked = redissonClient.getLock(lockKey).tryLock(-1, 30, TimeUnit.SECONDS);
@@ -186,10 +187,14 @@ public class PostsServiceImpl implements PostsService {
                 Integer finalSize = size;
                 threadPoolConfig.threadPoolExecutor().execute(() -> {
                     try {
+                        log.error("为啥不打印消息呢");
+                        log.error("我到这里了。准备开始查询");
                         // 查询数据库分页数据
                         List<Post> posts = postsMapper.selectPage(type, status, finalSort, offset, finalSize);
+
                         // 批量查询本页所有帖子的附件，减少 N 次单查
                         List<Long> postIdsBatch = posts.stream().map(Post::getId).collect(Collectors.toList());
+                        log.error("批量查询帖子附件: postIds={}", postIdsBatch);
                         List<Attachment> allAttachments = attachmentService.getAttachmentsByBusinessBatch("post",
                                 postIdsBatch);
                         java.util.Map<Long, java.util.List<Attachment>> attMap = (allAttachments == null)
@@ -198,10 +203,10 @@ public class PostsServiceImpl implements PostsService {
                                         .filter(a -> a.getBusinessId() != null)
                                         .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
 
-
+                        log.error("批量查询帖子附件结果: attMap={}", attMap);
                         for (Post p : posts) {
                             // 作者信息（走缓存）
-                            UserProfile profile = userService.getProfile(p.getUserId());
+                            UserProfile profile = userMapper.getProfile(p.getUserId());
                             String username = profile != null ? profile.getUsername() : null;
                             String avatar = profile != null ? profile.getAvatar() : null;
                             // 话题信息
@@ -245,7 +250,8 @@ public class PostsServiceImpl implements PostsService {
                         try {
                             long total1 = postsMapper.count(type, status);
                             total.set(total1);
-                            cachePostsList(finalSort, typeKey, statusKey, items, type, status, listKey, totalKey, total1);
+                            cachePostsList(finalSort, typeKey, statusKey, items, type, status, listKey, totalKey,
+                                    total1);
                         } catch (Exception e) {
                             log.error("Cache posts list failed after all retries: sort={}, type={}, status={}",
                                     finalSort, typeKey,
@@ -267,21 +273,27 @@ public class PostsServiceImpl implements PostsService {
                          * }
                          */
                         // ZSet 分层缓存恢复
-//                        try {
-//                            String zsetKeyLatest = String.format(POSTS_ZSET_KEY_FMT, finalSort, typeKey, statusKey);
-//                            for (Post p : posts) {
-//                                double scoreLatest = p.getCreatedAt() == null ? 0D
-//                                        : p.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
-//                                stringRedisTemplate.opsForZSet().add(zsetKeyLatest, String.valueOf(p.getId()),
-//                                        scoreLatest);
-//                                double scoreHot = p.getViewCount() == null ? 0D : p.getViewCount().doubleValue();
-//                                String zsetKeyHot = String.format(POSTS_ZSET_KEY_FMT, "hot", typeKey, statusKey);
-//                                stringRedisTemplate.opsForZSet().add(zsetKeyHot, String.valueOf(p.getId()), scoreHot);
-//                            }
-//                        } catch (Exception e) {
-//                            log.warn("Restore ZSet cache failed: sort={}, type={}, status={}", finalSort, typeKey,
-//                                    statusKey, e);
-//                        }
+                        // try {
+                        // String zsetKeyLatest = String.format(POSTS_ZSET_KEY_FMT, finalSort, typeKey,
+                        // statusKey);
+                        // for (Post p : posts) {
+                        // double scoreLatest = p.getCreatedAt() == null ? 0D
+                        // : p.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+                        // stringRedisTemplate.opsForZSet().add(zsetKeyLatest,
+                        // String.valueOf(p.getId()),
+                        // scoreLatest);
+                        // double scoreHot = p.getViewCount() == null ? 0D :
+                        // p.getViewCount().doubleValue();
+                        // String zsetKeyHot = String.format(POSTS_ZSET_KEY_FMT, "hot", typeKey,
+                        // statusKey);
+                        // stringRedisTemplate.opsForZSet().add(zsetKeyHot, String.valueOf(p.getId()),
+                        // scoreHot);
+                        // }
+                        // } catch (Exception e) {
+                        // log.warn("Restore ZSet cache failed: sort={}, type={}, status={}", finalSort,
+                        // typeKey,
+                        // statusKey, e);
+                        // }
 
                         // Bloom 过滤器维护（用户、话题、帖子）
                         try {
@@ -355,7 +367,8 @@ public class PostsServiceImpl implements PostsService {
                     firstInWindow = Boolean.TRUE.equals(
                             stringRedisTemplate.opsForValue().setIfAbsent(seenKey, "1", VIEW_DEDUPE_TTL_MINUTES,
                                     java.util.concurrent.TimeUnit.MINUTES));
-                } catch (Exception ignore) {
+                } catch (Exception e) {
+                    log.warn("Set post view seen failed: postId={}, uid={}", postId, uid, e);
                 }
             }
 
@@ -376,17 +389,18 @@ public class PostsServiceImpl implements PostsService {
                         }
 
                         // 不使用ZSet热度排序增量，简化为仅记录PV/UV与日统计
-
-                        String day = java.time.LocalDate.now()
-                                .format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
-                        String dayKey = String.format(POST_VIEW_DAILY_KEY_FMT, day);
-                        operations.opsForHash().increment(dayKey, String.valueOf(postId), 1L);
-                        operations.expire(dayKey, 7, java.util.concurrent.TimeUnit.DAYS);
+                        //
+                        // String day = java.time.LocalDate.now()
+                        // .format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
+                        // String dayKey = String.format(POST_VIEW_DAILY_KEY_FMT, day);
+                        // operations.opsForHash().increment(dayKey, String.valueOf(postId), 1L);
+                        // operations.expire(dayKey, 7, java.util.concurrent.TimeUnit.DAYS);
 
                         // 记录待落库增量（轻量批量刷盘）
                         String flushKey = String.format(POST_VIEW_FLUSH_KEY_FMT, postId);
                         operations.opsForValue().increment(flushKey, 1);
-                    } catch (Exception ignore) {
+                    } catch (Exception e) {
+                        log.error("Record post view failed{}", e.getMessage());
                     }
                     return null;
                 }
@@ -443,8 +457,11 @@ public class PostsServiceImpl implements PostsService {
                                     }
                                 } finally {
                                     try {
-                                        lock.unlock();
-                                    } catch (Exception ignore) {
+                                        if (lock.isHeldByCurrentThread()) {
+                                            lock.unlock();
+                                        }
+                                    } catch (Exception e) {
+                                        log.error("解锁异常", e);
                                     }
                                 }
                             }
@@ -520,11 +537,13 @@ public class PostsServiceImpl implements PostsService {
                             try {
                                 likesMapper.insert(uid, "post", postId);
                             } catch (Exception ignore) {
+                                log.error("记录点赞失败", ignore);
                             }
                         } else {
                             try {
                                 likesMapper.delete(uid, "post", postId);
                             } catch (Exception ignore) {
+                                log.error("记录取消点赞失败", ignore);
                             }
                         }
                         // 列表缓存不做双删，依赖集合的精确 SADD/SREM 与读路径按需重建
@@ -776,6 +795,8 @@ public class PostsServiceImpl implements PostsService {
                     if (post != null && post.getCollectCount() != null)
                         collectCountDb = post.getCollectCount();
                 } catch (Exception ignore) {
+                    log.error("获取数据库中帖子收藏数异常");
+                    throw new RuntimeException("服务器繁忙");
                 }
                 int pendingDelta = 0;
                 try {
@@ -784,6 +805,8 @@ public class PostsServiceImpl implements PostsService {
                     if (StrUtil.isNotBlank(v))
                         pendingDelta = Integer.parseInt(v);
                 } catch (Exception ignore) {
+                    log.error("获取收藏数异常");
+                    throw new RuntimeException("服务器繁忙");
                 }
                 boolean finalCollected = targetCollect;
                 int collectCount = collectCountDb + pendingDelta;
@@ -902,7 +925,7 @@ public class PostsServiceImpl implements PostsService {
             }
         });
 
-        long commentId= l;
+        long commentId = l;
         // 更新完可以选择预热一下
         return Result.success(commentId);
     }
@@ -994,7 +1017,7 @@ public class PostsServiceImpl implements PostsService {
                 log.error("Async flush reply count failed for post: {}", postId, e);
             }
         });
-        long replyCommentId=l;
+        long replyCommentId = l;
         return Result.success(replyCommentId);
     }
 
@@ -1035,6 +1058,8 @@ public class PostsServiceImpl implements PostsService {
                     try {
                         delta = Integer.parseInt(cur);
                     } catch (Exception ignore) {
+                        log.error("Invalid flush count: {}", cur);
+                        throw new RuntimeException("Invalid flush count: " + cur);
                     }
                 }
                 if (delta != 0) {
@@ -1310,11 +1335,9 @@ public class PostsServiceImpl implements PostsService {
                                         .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
                         List<PostListItemVO> items = new ArrayList<>();
                         for (Post p : firstPage) {
-                            /*
-                             * UserProfile profile = userService.getProfile(p.getUserId());
-                             * String username = profile != null ? profile.getUsername() : null;
-                             * String avatar = profile != null ? profile.getAvatar() : null;
-                             */
+                            UserProfile profile = userMapper.getProfile(p.getUserId());
+                            String username = profile != null ? profile.getUsername() : null;
+                            String avatar = profile != null ? profile.getAvatar() : null;
                             String topicName = null;
                             if (p.getTopicId() != null) {
                                 TopicVO topicVO = topicService.getTopicCachedById(p.getTopicId().intValue());
@@ -1335,10 +1358,8 @@ public class PostsServiceImpl implements PostsService {
                                     .title(p.getTitle())
                                     .content(p.getContent())
                                     .userId(p.getUserId())
-                                    /*
-                                     * .authorUsername(username)
-                                     * .authorAvatar(avatar)
-                                     */
+                                    .authorUsername(username)
+                                    .authorAvatar(avatar)
                                     .topicId(p.getTopicId())
                                     .topicName(topicName)
                                     .likeCount(p.getLikeCount())
@@ -1382,11 +1403,9 @@ public class PostsServiceImpl implements PostsService {
                                             .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
                             List<PostListItemVO> itemsT = new ArrayList<>();
                             for (Post p : firstPageByTopic) {
-                                /*
-                                 * UserProfile profile = userService.getProfile(p.getUserId());
-                                 * String username = profile != null ? profile.getUsername() : null;
-                                 * String avatar = profile != null ? profile.getAvatar() : null;
-                                 */
+                                UserProfile profile = userMapper.getProfile(p.getUserId());
+                                String username = profile != null ? profile.getUsername() : null;
+                                String avatar = profile != null ? profile.getAvatar() : null;
                                 String topicName = null;
                                 if (p.getTopicId() != null) {
                                     TopicVO topicVO = topicService.getTopicCachedById(p.getTopicId().intValue());
@@ -1407,10 +1426,8 @@ public class PostsServiceImpl implements PostsService {
                                         .title(p.getTitle())
                                         .content(p.getContent())
                                         .userId(p.getUserId())
-                                        /*
-                                         * .authorUsername(username)
-                                         * .authorAvatar(avatar)
-                                         */
+                                        .authorUsername(username)
+                                        .authorAvatar(avatar)
                                         .topicId(p.getTopicId())
                                         .topicName(topicName)
                                         .likeCount(p.getLikeCount())
@@ -1462,11 +1479,10 @@ public class PostsServiceImpl implements PostsService {
 
                 // ES 索引写入
                 try {
-                    /*
-                     * UserProfile profile = userService.getProfile(post.getUserId());
-                     * String username = profile != null ? profile.getUsername() : null;
-                     * String avatar = profile != null ? profile.getAvatar() : null;
-                     */
+                    UserProfile profile = userMapper.getProfile(post.getUserId());
+                    String username = profile != null ? profile.getUsername() : null;
+                    String avatar = profile != null ? profile.getAvatar() : null;
+                    log.info("用户信息为{},{}", username, avatar);
                     String topicName = null;
                     if (post.getTopicId() != null) {
                         TopicVO topicVO = topicService.getTopicCachedById(post.getTopicId().intValue());
@@ -1478,10 +1494,8 @@ public class PostsServiceImpl implements PostsService {
                     doc.put("topicId", post.getTopicId());
                     doc.put("title", post.getTitle());
                     doc.put("content", post.getContent());
-                    /*
-                     * doc.put("authorUsername", username);
-                     * doc.put("authorAvatar", avatar);
-                     */
+                    doc.put("authorUsername", username);
+                    doc.put("authorAvatar", avatar);
                     doc.put("topicName", topicName);
                     doc.put("collectCount", post.getCollectCount());
                     doc.put("likeCount", post.getLikeCount());
@@ -1862,7 +1876,7 @@ public class PostsServiceImpl implements PostsService {
                     liteAttachments.add(AttachmentLite.builder().fileUrl(a.getFileUrl()).fileType(a.getFileType())
                             .fileName(a.getFileName()).build());
                 }
-            UserProfile profile = userService.getProfile(post.getUserId());
+            UserProfile profile = userMapper.getProfile(post.getUserId());
             String username = profile != null ? profile.getUsername() : null;
             String avatar = profile != null ? profile.getAvatar() : null;
             String topicName = null;
@@ -1924,6 +1938,125 @@ public class PostsServiceImpl implements PostsService {
             } catch (Exception e2) {
                 log.warn("按模式删除缓存失败: pattern={}", pattern, e2);
             }
+        }
+    }
+
+    @Scheduled(cron = "0 0 */2 * * ?")
+    public void flushLikeDataToDatabase() {
+        String lockKey = "lock:post:like:global:flush";
+        var lock = redissonClient.getLock(lockKey);
+        boolean isLocked = false;
+        try {
+            // 尝试获取锁，等待0秒，锁定10分钟
+            isLocked = lock.tryLock(0, 600, TimeUnit.SECONDS);
+            if (!isLocked) {
+                log.info("Another instance is performing the flush task. Skipping.");
+                return;
+            }
+
+            log.info("Start flushing like data from Redis to DB...");
+
+            List<String> keys = new ArrayList<>();
+            ScanOptions options = ScanOptions.scanOptions()
+                    .match("post:like:flush:*")
+                    .count(1000)
+                    .build();
+
+            stringRedisTemplate.execute((RedisCallback<Void>) connection -> {
+                try (Cursor<byte[]> cursor = connection.scan(options)) {
+                    while (cursor.hasNext()) {
+                        keys.add(new String(cursor.next()));
+                    }
+                }
+                return null;
+            });
+
+            if (keys.isEmpty()) {
+                log.info("No like data to flush.");
+                return;
+            }
+
+            int batchSize = 1000;
+            for (int i = 0; i < keys.size(); i += batchSize) {
+                int end = Math.min(i + batchSize, keys.size());
+                processFlushBatch(keys.subList(i, end));
+            }
+
+            log.info("Flushed {} keys to DB.", keys.size());
+
+        } catch (InterruptedException e) {
+            log.warn("Flush task interrupted", e);
+        } catch (Exception e) {
+            log.error("Flush task failed", e);
+        } finally {
+            if (isLocked) {
+                try {
+                    lock.unlock();
+                } catch (Exception e) {
+                    log.error("Unlock failed", e);
+                }
+            }
+        }
+    }
+
+    private void processFlushBatch(List<String> keys) {
+        if (keys == null || keys.isEmpty())
+            return;
+
+        List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
+        if (values == null || values.isEmpty())
+            return;
+
+        List<Map<String, Object>> updateList = new ArrayList<>();
+        List<String> keysToDecr = new ArrayList<>();
+        List<Integer> deltasToDecr = new ArrayList<>();
+
+        for (int i = 0; i < keys.size(); i++) {
+            String val = values.get(i);
+            if (StrUtil.isBlank(val))
+                continue;
+
+            try {
+                int delta = Integer.parseInt(val);
+                if (delta == 0)
+                    continue;
+
+                String key = keys.get(i);
+                // key format: post:like:flush:{id}
+                String idStr = key.substring(key.lastIndexOf(":") + 1);
+                Long postId = Long.parseLong(idStr);
+
+                Map<String, Object> map = new java.util.HashMap<>();
+                map.put("id", postId);
+                map.put("delta", delta);
+                updateList.add(map);
+
+                keysToDecr.add(key);
+                deltasToDecr.add(delta);
+            } catch (Exception e) {
+                log.error("Error processing key: " + keys.get(i), e);
+            }
+        }
+
+        if (updateList.isEmpty())
+            return;
+
+        try {
+            // Batch update DB
+            postsMapper.updateLikeCountBatch(updateList);
+
+            // Decrement Redis
+            stringRedisTemplate.executePipelined(new org.springframework.data.redis.core.SessionCallback<Object>() {
+                @Override
+                public Object execute(org.springframework.data.redis.core.RedisOperations operations) {
+                    for (int i = 0; i < keysToDecr.size(); i++) {
+                        operations.opsForValue().decrement(keysToDecr.get(i), deltasToDecr.get(i));
+                    }
+                    return null;
+                }
+            });
+        } catch (Exception e) {
+            log.error("Batch update failed", e);
         }
     }
 }

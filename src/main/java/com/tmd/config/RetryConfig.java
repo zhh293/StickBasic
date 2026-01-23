@@ -17,8 +17,8 @@ import java.util.Map;
  * 企业级重试配置（结合Spring Retry + 自定义策略）
  */
 @Slf4j
-@Configuration
-@EnableRetry // 启用Spring Retry注解
+//@Configuration
+//@EnableRetry // 启用Spring Retry注解
 public class RetryConfig {
 
     /**
@@ -30,9 +30,12 @@ public class RetryConfig {
     public RetryTemplate redisRetryTemplate() {
         RetryTemplate retryTemplate = new RetryTemplate();
 
-        // 1.1 重试策略：最多3次，仅重试指定异常（Redis相关）
+        // 1.1 重试策略：最多3次，重试网络和Redis相关异常
         Map<Class<? extends Throwable>, Boolean> retryableExceptions = new HashMap<>();
         retryableExceptions.put(org.springframework.data.redis.RedisConnectionFailureException.class, true);
+        retryableExceptions.put(java.net.SocketException.class, true);  // 网络连接异常
+        retryableExceptions.put(org.springframework.web.client.ResourceAccessException.class, true);  // 资源访问异常
+        retryableExceptions.put(org.springframework.web.client.RestClientException.class, true);  // REST客户端异常
         retryableExceptions.put(IllegalArgumentException.class, false);
         SimpleRetryPolicy retryPolicy = new SimpleRetryPolicy(3, retryableExceptions);
 
@@ -49,22 +52,22 @@ public class RetryConfig {
         retryTemplate.registerListener(new org.springframework.retry.RetryListener() {
             @Override
             public <T, E extends Throwable> boolean open(org.springframework.retry.RetryContext context, org.springframework.retry.RetryCallback<T, E> callback) {
-                log.info("Redis操作重试开始，最大重试次数：{}", retryPolicy.getMaxAttempts());
+                log.info("网络操作重试开始，最大重试次数：{}", retryPolicy.getMaxAttempts());
                 return true;
             }
 
             @Override
             public <T, E extends Throwable> void close(org.springframework.retry.RetryContext context, org.springframework.retry.RetryCallback<T, E> callback, Throwable throwable) {
                 if (throwable != null) {
-                    log.error("Redis操作重试失败，已达到最大重试次数", throwable);
+                    log.error("网络操作重试失败，已达到最大重试次数", throwable);
                 } else {
-                    log.info("Redis操作重试成功，重试次数：{}", context.getRetryCount());
+                    log.info("网络操作重试成功，重试次数：{}", context.getRetryCount());
                 }
             }
 
             @Override
             public <T, E extends Throwable> void onError(org.springframework.retry.RetryContext context, org.springframework.retry.RetryCallback<T, E> callback, Throwable throwable) {
-                log.warn("Redis操作重试失败，第{}次重试，异常：{}", 
+                log.warn("网络操作重试失败，第{}次重试，异常：{}", 
                         context.getRetryCount(), throwable.getMessage());
             }
         });

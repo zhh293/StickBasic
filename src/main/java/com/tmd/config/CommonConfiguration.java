@@ -40,7 +40,7 @@ public class CommonConfiguration {
         public ChatClient DistinguishChatClient(OpenAiChatModel model){
                 return ChatClient.builder(model)
                         .defaultSystem(DISTINGUISH_WORD_PROMPT)
-                        .defaultAdvisors(new SimpleLoggerAdvisor())
+                        .defaultAdvisors()
                         .build();
         }
 
