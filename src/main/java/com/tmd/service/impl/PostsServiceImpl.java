@@ -226,6 +226,26 @@ public class PostsServiceImpl implements PostsService {
                                         .fileName(a.getFileName())
                                         .build());
                             }
+                            // 获取Redis中的增量数据（点赞、评论、阅读）
+                            String likeKey = String.format(POST_LIKE_FLUSH_KEY_FMT, p.getId());
+                            String commentKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, p.getId());
+                            String viewKey = String.format(POST_VIEW_FLUSH_KEY_FMT, p.getId());
+
+                            List<String> keys = java.util.Arrays.asList(likeKey, commentKey, viewKey);
+                            List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
+
+                            int likeDelta = 0;
+                            int commentDelta = 0;
+                            int viewDelta = 0;
+
+                            if (values != null && values.size() == 3) {
+                                if (StrUtil.isNotBlank(values.get(0)))
+                                    likeDelta = Integer.parseInt(values.get(0));
+                                if (StrUtil.isNotBlank(values.get(1)))
+                                    commentDelta = Integer.parseInt(values.get(1));
+                                if (StrUtil.isNotBlank(values.get(2)))
+                                    viewDelta = Integer.parseInt(values.get(2));
+                            }
 
                             PostListItemVO vo = PostListItemVO.builder()
                                     .id(p.getId())
@@ -236,10 +256,11 @@ public class PostsServiceImpl implements PostsService {
                                     .authorAvatar(avatar)
                                     .topicId(p.getTopicId())
                                     .topicName(topicName)
-                                    .likeCount(p.getLikeCount())
-                                    .commentCount(p.getCommentCount())
-                                    .shareCount(p.getShareCount())
-                                    .viewCount(p.getViewCount())
+                                    .likeCount((p.getLikeCount() == null ? 0 : p.getLikeCount()) + likeDelta)
+                                    .commentCount(
+                                            (p.getCommentCount() == null ? 0 : p.getCommentCount()) + commentDelta)
+                                    .shareCount(p.getShareCount() == null ? 0 : p.getShareCount())
+                                    .viewCount((p.getViewCount() == null ? 0 : p.getViewCount()) + viewDelta)
                                     .createdAt(p.getCreatedAt())
                                     .updatedAt(p.getUpdatedAt())
                                     .attachments(liteAttachments)
@@ -769,10 +790,12 @@ public class PostsServiceImpl implements PostsService {
                                                         String.valueOf(postId)).script(script);
                                                 esClient.update(ur, RequestOptions.DEFAULT);
                                             } catch (Exception ignore) {
+                                                log.error("收藏数更新异常");
                                             }
                                             try {
                                                 stringRedisTemplate.opsForValue().decrement(flushKey, delta);
                                             } catch (Exception ignore) {
+                                                log.error("扣减数目异常");
                                             }
                                         }
                                     } finally {
@@ -1024,6 +1047,391 @@ public class PostsServiceImpl implements PostsService {
     /**
      * 定时任务：每分钟检查并刷新未达到阈值的评论计数
      */
+
+    @Override
+    public Result getPostComments(Long postId, Integer page, Integer size, String sortBy) {
+        if (postId == null || postId <= 0) {
+            return Result.error("参数错误");
+        }
+        if (page == null || page < 1)
+            page = 1;
+        if (size == null || size < 1)
+            size = 10;
+        int offset = (page - 1) * size;
+
+        // 1. Fetch Root Comments (DB Direct)
+        List<PostComment> roots = postCommentMapper.selectRoots(postId, offset, size, sortBy);
+        long total = postCommentMapper.countRootsByPostId(postId);
+
+        if (roots == null || roots.isEmpty()) {
+            return Result.success(PageResult.builder()
+                    .rows(Collections.emptyList())
+                    .total(total)
+                    .currentPage(page)
+                    .build());
+        }
+
+        // 2. Fetch Replies for these roots (DB Direct)
+        List<Long> rootIds = roots.stream().map(PostComment::getId).collect(Collectors.toList());
+        List<PostComment> replies = postCommentMapper.selectRepliesByRootIds(rootIds);
+
+        // 3. Map all comments for easy lookup
+        Map<Long, PostComment> commentMap = new java.util.HashMap<>();
+        for (PostComment c : roots)
+            commentMap.put(c.getId(), c);
+        for (PostComment c : replies)
+            commentMap.put(c.getId(), c);
+
+        // 4. Collect User IDs and fetch User Profiles
+        Set<Long> userIds = new java.util.HashSet<>();
+        roots.forEach(c -> userIds.add(c.getCommenterId()));
+        replies.forEach(c -> userIds.add(c.getCommenterId()));
+
+        Map<Long, UserProfile> userMap = new java.util.HashMap<>();
+        if (!userIds.isEmpty()) {
+            List<UserProfile> profiles = userMapper.selectBatchProfiles(new ArrayList<>(userIds));
+            for (UserProfile p : profiles) {
+                if (p.getId() != null) {
+                    userMap.put(p.getId(), p);
+                }
+            }
+        }
+
+        // 5. Build VOs
+        List<PostCommentVO> vos = new ArrayList<>();
+
+        // Group replies by rootId
+        Map<Long, List<PostComment>> repliesByRoot = replies.stream()
+                .collect(Collectors.groupingBy(PostComment::getRootId));
+
+        for (PostComment root : roots) {
+            UserProfile author = userMap.get(root.getCommenterId());
+
+            List<PostCommentVO.ReplyVO> replyVOs = new ArrayList<>();
+            List<PostComment> rootReplies = repliesByRoot.getOrDefault(root.getId(), Collections.emptyList());
+
+            for (PostComment child : rootReplies) {
+                UserProfile childAuthor = userMap.get(child.getCommenterId());
+
+                // Determine replyToUser
+                PostCommentVO.UserInfo replyToUserVO = null;
+                if (child.getParentId() != null && !child.getParentId().equals(root.getId())) {
+                    PostComment parent = commentMap.get(child.getParentId());
+                    if (parent != null) {
+                        UserProfile parentAuthor = userMap.get(parent.getCommenterId());
+                        if (parentAuthor != null) {
+                            replyToUserVO = PostCommentVO.UserInfo.builder()
+                                    .userId(parentAuthor.getId())
+                                    .username(parentAuthor.getUsername())
+                                    .avatar(parentAuthor.getAvatar())
+                                    .build();
+                        }
+                    }
+                }
+
+                replyVOs.add(PostCommentVO.ReplyVO.builder()
+                        .commentId(child.getId())
+                        .content(child.getContent())
+                        .likeCount(child.getLikes())
+                        .author(childAuthor != null ? PostCommentVO.UserInfo.builder()
+                                .userId(childAuthor.getId())
+                                .username(childAuthor.getUsername())
+                                .avatar(childAuthor.getAvatar())
+                                .build() : null)
+                        .replyToUser(replyToUserVO)
+                        .createdAt(child.getCreatedAt().toString())
+                        .isLiked(false)
+                        .build());
+            }
+
+            vos.add(PostCommentVO.builder()
+                    .commentId(root.getId())
+                    .content(root.getContent())
+                    .likeCount(root.getLikes())
+                    .replyCount(root.getReplyCount())
+                    .status("normal")
+                    .author(author != null ? PostCommentVO.UserInfo.builder()
+                            .userId(author.getId())
+                            .username(author.getUsername())
+                            .avatar(author.getAvatar())
+                            .build() : null)
+                    .replies(replyVOs)
+                    .isLiked(false)
+                    .createdAt(root.getCreatedAt().toString())
+                    .updatedAt(root.getCreatedAt().toString())
+                    .build());
+        }
+
+        return Result.success(PageResult.builder()
+                .rows(vos)
+                .total(total)
+                .currentPage(page)
+                .build());
+    }
+
+    @Override
+    public Result updatePosts(PostUpdateDTO postUpdateDTO) {
+        Integer postIdInt = postUpdateDTO.getPostId();
+        if (postIdInt == null || postIdInt <= 0) {
+            return Result.error("参数错误");
+        }
+        Long postId = postIdInt.longValue();
+
+        // 1. Bloom Filter Check
+        RBloomFilter<Long> bloomFilter = redissonClient.getBloomFilter("bf:post:id");
+        if (!bloomFilter.contains(postId)) {
+            return Result.error("帖子不存在");
+        }
+
+        // 2. Validate Fields
+        if (StrUtil.isBlank(postUpdateDTO.getTitle()) && StrUtil.isBlank(postUpdateDTO.getContent())
+                && postUpdateDTO.getTopicId() == null && StrUtil.isBlank(postUpdateDTO.getStatus())) {
+            return Result.error("没有需要更新的内容");
+        }
+
+        // 3. Check Topic Existence if updating topic
+        if (postUpdateDTO.getTopicId() != null) {
+            TopicVO topic = topicService.getTopicCachedById(postUpdateDTO.getTopicId());
+            if (topic == null) {
+                return Result.error("话题不存在");
+            }
+        }
+
+        // 4. Fetch Existing Post
+        Post existingPost = postsMapper.selectById(postId);
+        if (existingPost == null) {
+            return Result.error("帖子不存在");
+        }
+
+        // 5. Update DB
+        Post updatePost = new Post();
+        updatePost.setId(postId);
+        if (StrUtil.isNotBlank(postUpdateDTO.getTitle())) {
+            updatePost.setTitle(postUpdateDTO.getTitle());
+            existingPost.setTitle(postUpdateDTO.getTitle());
+        }
+        if (StrUtil.isNotBlank(postUpdateDTO.getContent())) {
+            // XSS Filter
+            String content = cn.hutool.http.HtmlUtil.filter(postUpdateDTO.getContent());
+            updatePost.setContent(content);
+            existingPost.setContent(content);
+        }
+        if (postUpdateDTO.getTopicId() != null) {
+            updatePost.setTopicId(postUpdateDTO.getTopicId().longValue());
+            existingPost.setTopicId(postUpdateDTO.getTopicId().longValue());
+        }
+        if (StrUtil.isNotBlank(postUpdateDTO.getStatus())) {
+            try {
+                PostStatus status = PostStatus.valueOf(postUpdateDTO.getStatus());
+                updatePost.setStatus(status);
+                existingPost.setStatus(status);
+            } catch (IllegalArgumentException e) {
+                return Result.error("无效的状态");
+            }
+        }
+
+        postsMapper.update(updatePost);
+
+        // 6. Async Cache Update (Delete & Preheat & ES)
+        threadPoolConfig.threadPoolExecutor().execute(() -> {
+            try {
+                // 6.1 Delete Caches
+                Set<String> keysToDelete = new java.util.HashSet<>();
+                // Scan for list keys
+                ScanOptions options = ScanOptions.scanOptions().match("post:list:*").count(100).build();
+                try (Cursor<String> cursor = stringRedisTemplate.scan(options)) {
+                    while (cursor.hasNext()) {
+                        keysToDelete.add(cursor.next());
+                    }
+                }
+                // Scan for total keys
+                ScanOptions optionsTotal = ScanOptions.scanOptions().match("post:total:*").count(100).build();
+                try (Cursor<String> cursor = stringRedisTemplate.scan(optionsTotal)) {
+                    while (cursor.hasNext()) {
+                        keysToDelete.add(cursor.next());
+                    }
+                }
+                // Scan for topic list keys
+                ScanOptions optionsTopicList = ScanOptions.scanOptions().match("topic:post:list:*").count(100).build();
+                try (Cursor<String> cursor = stringRedisTemplate.scan(optionsTopicList)) {
+                    while (cursor.hasNext()) {
+                        keysToDelete.add(cursor.next());
+                    }
+                }
+                // Scan for topic total keys
+                ScanOptions optionsTopicTotal = ScanOptions.scanOptions().match("topic:post:total:*").count(100)
+                        .build();
+                try (Cursor<String> cursor = stringRedisTemplate.scan(optionsTopicTotal)) {
+                    while (cursor.hasNext()) {
+                        keysToDelete.add(cursor.next());
+                    }
+                }
+
+                if (!keysToDelete.isEmpty()) {
+                    stringRedisTemplate.delete(keysToDelete);
+                }
+
+                // 6.2 Preheat Cache (Latest List - Global)
+                // Reuse logic from createPost
+                String typeKey = existingPost.getPostType() == null ? "-" : existingPost.getPostType();
+                String statusKey = existingPost.getStatus() == null ? "-" : existingPost.getStatus().name();
+
+                try {
+                    int[] sizes = new int[] { 10, 20 };
+                    for (int s : sizes) {
+                        String listLatest = String.format(POSTS_LIST_KEY_FMT, typeKey, statusKey, "latest", 1, s);
+                        List<Post> firstPage = postsMapper.selectPage(typeKey.equals("-") ? null : typeKey,
+                                statusKey.equals("-") ? null : statusKey, "latest", 0, s);
+
+                        cacheListHelper(firstPage, listLatest);
+                    }
+                } catch (Exception e) {
+                    log.warn("Update post cache warm failed: id={}", postId, e);
+                }
+
+                // 6.3 Preheat Cache (Latest List - Topic)
+                if (existingPost.getTopicId() != null) {
+                    try {
+                        Long topicId = existingPost.getTopicId();
+                        int[] sizesT = new int[] { 10, 20 };
+                        for (int s : sizesT) {
+                            String topicListLatest = String.format("topic:post:list:%d:%s:%s:%d:%d", topicId, statusKey,
+                                    "latest", 1, s);
+                            List<Post> firstPageByTopic = postsMapper.selectPageByTopic(topicId,
+                                    statusKey.equals("-") ? null : statusKey, "latest", 0, s);
+
+                            cacheListHelper(firstPageByTopic, topicListLatest);
+                        }
+                    } catch (Exception e) {
+                        log.warn("Update topic post cache warm failed: id={}", postId, e);
+                    }
+                }
+
+                // 6.4 Update ES
+                try {
+                    UserProfile profile = userMapper.getProfile(existingPost.getUserId());
+                    String username = profile != null ? profile.getUsername() : null;
+                    String avatar = profile != null ? profile.getAvatar() : null;
+                    String topicName = null;
+                    if (existingPost.getTopicId() != null) {
+                        TopicVO topicVO = topicService.getTopicCachedById(existingPost.getTopicId().intValue());
+                        topicName = topicVO != null ? topicVO.getName() : null;
+                    }
+                    java.util.Map<String, Object> doc = new java.util.HashMap<>();
+                    doc.put("id", existingPost.getId());
+                    doc.put("userId", existingPost.getUserId());
+                    doc.put("topicId", existingPost.getTopicId());
+                    doc.put("title", existingPost.getTitle());
+                    doc.put("content", existingPost.getContent());
+                    doc.put("authorUsername", username);
+                    doc.put("authorAvatar", avatar);
+                    doc.put("topicName", topicName);
+                    doc.put("collectCount", existingPost.getCollectCount());
+                    doc.put("likeCount", existingPost.getLikeCount());
+                    doc.put("commentCount", existingPost.getCommentCount());
+                    doc.put("shareCount", existingPost.getShareCount());
+                    doc.put("viewCount", existingPost.getViewCount());
+                    doc.put("createdAt",
+                            existingPost.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+                    doc.put("updatedAt", System.currentTimeMillis()); // Update time
+                    doc.put("status", existingPost.getStatus().name());
+
+                    IndexRequest indexRequest = new IndexRequest(INDEX_POSTS).id(String.valueOf(existingPost.getId()))
+                            .source(doc);
+                    esClient.index(indexRequest, RequestOptions.DEFAULT);
+                } catch (Exception e) {
+                    log.warn("Update ES index failed: id={}", postId, e);
+                }
+
+                // 6.5 Maintain Bloom Filter
+                try {
+                    RBloomFilter<Long> postBloomUpdate = redissonClient.getBloomFilter("bf:post:id");
+                    postBloomUpdate.add(postId);
+                } catch (Exception e) {
+                    log.warn("Update bloom failed: id={}", postId, e);
+                }
+
+            } catch (Exception e) {
+                log.error("Update post async tasks failed: id={}", postId, e);
+            }
+        });
+
+        return Result.success("更新成功");
+    }
+
+    private void cacheListHelper(List<Post> posts, String cacheKey) {
+        if (posts == null || posts.isEmpty()) {
+            stringRedisTemplate.opsForValue().set(cacheKey, "[]", ttlJitter(LIST_TTL_SECONDS), TimeUnit.SECONDS);
+            return;
+        }
+        List<Long> postIdsBatch = posts.stream().map(Post::getId).collect(Collectors.toList());
+        List<Attachment> allAttachments = attachmentService.getAttachmentsByBusinessBatch("post", postIdsBatch);
+        java.util.Map<Long, java.util.List<Attachment>> attMap = (allAttachments == null)
+                ? new java.util.HashMap<>()
+                : allAttachments.stream()
+                        .filter(a -> a.getBusinessId() != null)
+                        .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
+        List<PostListItemVO> items = new ArrayList<>();
+        for (Post p : posts) {
+            UserProfile profile = userMapper.getProfile(p.getUserId());
+            String username = profile != null ? profile.getUsername() : null;
+            String avatar = profile != null ? profile.getAvatar() : null;
+            String topicName = null;
+            if (p.getTopicId() != null) {
+                TopicVO topicVO = topicService.getTopicCachedById(p.getTopicId().intValue());
+                topicName = topicVO != null ? topicVO.getName() : null;
+            }
+            List<Attachment> attachments = attMap.getOrDefault(p.getId(), java.util.Collections.emptyList());
+            List<AttachmentLite> liteAttachments = new ArrayList<>();
+            for (Attachment a : attachments) {
+                liteAttachments.add(AttachmentLite.builder()
+                        .fileUrl(a.getFileUrl())
+                        .fileType(a.getFileType())
+                        .fileName(a.getFileName())
+                        .build());
+            }
+
+            // Increments
+            String likeKey = String.format(POST_LIKE_FLUSH_KEY_FMT, p.getId());
+            String commentKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, p.getId());
+            String viewKey = String.format(POST_VIEW_FLUSH_KEY_FMT, p.getId());
+            List<String> keys = java.util.Arrays.asList(likeKey, commentKey, viewKey);
+            List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
+            int likeDelta = 0;
+            int commentDelta = 0;
+            int viewDelta = 0;
+            if (values != null && values.size() == 3) {
+                if (StrUtil.isNotBlank(values.get(0)))
+                    likeDelta = Integer.parseInt(values.get(0));
+                if (StrUtil.isNotBlank(values.get(1)))
+                    commentDelta = Integer.parseInt(values.get(1));
+                if (StrUtil.isNotBlank(values.get(2)))
+                    viewDelta = Integer.parseInt(values.get(2));
+            }
+
+            PostListItemVO vo = PostListItemVO.builder()
+                    .id(p.getId())
+                    .title(p.getTitle())
+                    .content(p.getContent())
+                    .userId(p.getUserId())
+                    .authorUsername(username)
+                    .authorAvatar(avatar)
+                    .topicId(p.getTopicId())
+                    .topicName(topicName)
+                    .likeCount((p.getLikeCount() == null ? 0 : p.getLikeCount()) + likeDelta)
+                    .commentCount((p.getCommentCount() == null ? 0 : p.getCommentCount()) + commentDelta)
+                    .shareCount(p.getShareCount() == null ? 0 : p.getShareCount())
+                    .viewCount((p.getViewCount() == null ? 0 : p.getViewCount()) + viewDelta)
+                    .createdAt(p.getCreatedAt())
+                    .updatedAt(p.getUpdatedAt())
+                    .attachments(liteAttachments)
+                    .build();
+            items.add(vo);
+        }
+        String json = JSONUtil.toJsonStr(items);
+        stringRedisTemplate.opsForValue().set(cacheKey, json, ttlJitter(LIST_TTL_SECONDS), TimeUnit.SECONDS);
+    }
+
     @Scheduled(cron = "0 0/1 * * * ?")
     public void scheduledFlushCommentCounts() {
         try {
@@ -1353,6 +1761,27 @@ public class PostsServiceImpl implements PostsService {
                                         .fileName(a.getFileName())
                                         .build());
                             }
+                            // 获取Redis中的增量数据（点赞、评论、阅读）
+                            String likeKey = String.format(POST_LIKE_FLUSH_KEY_FMT, p.getId());
+                            String commentKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, p.getId());
+                            String viewKey = String.format(POST_VIEW_FLUSH_KEY_FMT, p.getId());
+
+                            List<String> keys = java.util.Arrays.asList(likeKey, commentKey, viewKey);
+                            List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
+
+                            int likeDelta = 0;
+                            int commentDelta = 0;
+                            int viewDelta = 0;
+
+                            if (values != null && values.size() == 3) {
+                                if (StrUtil.isNotBlank(values.get(0)))
+                                    likeDelta = Integer.parseInt(values.get(0));
+                                if (StrUtil.isNotBlank(values.get(1)))
+                                    commentDelta = Integer.parseInt(values.get(1));
+                                if (StrUtil.isNotBlank(values.get(2)))
+                                    viewDelta = Integer.parseInt(values.get(2));
+                            }
+
                             PostListItemVO vo = PostListItemVO.builder()
                                     .id(p.getId())
                                     .title(p.getTitle())
@@ -1362,10 +1791,11 @@ public class PostsServiceImpl implements PostsService {
                                     .authorAvatar(avatar)
                                     .topicId(p.getTopicId())
                                     .topicName(topicName)
-                                    .likeCount(p.getLikeCount())
-                                    .commentCount(p.getCommentCount())
-                                    .shareCount(p.getShareCount())
-                                    .viewCount(p.getViewCount())
+                                    .likeCount((p.getLikeCount() == null ? 0 : p.getLikeCount()) + likeDelta)
+                                    .commentCount(
+                                            (p.getCommentCount() == null ? 0 : p.getCommentCount()) + commentDelta)
+                                    .shareCount(p.getShareCount() == null ? 0 : p.getShareCount())
+                                    .viewCount((p.getViewCount() == null ? 0 : p.getViewCount()) + viewDelta)
                                     .createdAt(p.getCreatedAt())
                                     .updatedAt(p.getUpdatedAt())
                                     .attachments(liteAttachments)
@@ -1421,6 +1851,27 @@ public class PostsServiceImpl implements PostsService {
                                             .fileName(a.getFileName())
                                             .build());
                                 }
+                                // 获取Redis中的增量数据（点赞、评论、阅读）
+                                String likeKey = String.format(POST_LIKE_FLUSH_KEY_FMT, p.getId());
+                                String commentKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, p.getId());
+                                String viewKey = String.format(POST_VIEW_FLUSH_KEY_FMT, p.getId());
+
+                                List<String> keys = java.util.Arrays.asList(likeKey, commentKey, viewKey);
+                                List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
+
+                                int likeDelta = 0;
+                                int commentDelta = 0;
+                                int viewDelta = 0;
+
+                                if (values != null && values.size() == 3) {
+                                    if (StrUtil.isNotBlank(values.get(0)))
+                                        likeDelta = Integer.parseInt(values.get(0));
+                                    if (StrUtil.isNotBlank(values.get(1)))
+                                        commentDelta = Integer.parseInt(values.get(1));
+                                    if (StrUtil.isNotBlank(values.get(2)))
+                                        viewDelta = Integer.parseInt(values.get(2));
+                                }
+
                                 PostListItemVO vo = PostListItemVO.builder()
                                         .id(p.getId())
                                         .title(p.getTitle())
@@ -1430,10 +1881,11 @@ public class PostsServiceImpl implements PostsService {
                                         .authorAvatar(avatar)
                                         .topicId(p.getTopicId())
                                         .topicName(topicName)
-                                        .likeCount(p.getLikeCount())
-                                        .commentCount(p.getCommentCount())
-                                        .shareCount(p.getShareCount())
-                                        .viewCount(p.getViewCount())
+                                        .likeCount((p.getLikeCount() == null ? 0 : p.getLikeCount()) + likeDelta)
+                                        .commentCount(
+                                                (p.getCommentCount() == null ? 0 : p.getCommentCount()) + commentDelta)
+                                        .shareCount(p.getShareCount() == null ? 0 : p.getShareCount())
+                                        .viewCount((p.getViewCount() == null ? 0 : p.getViewCount()) + viewDelta)
                                         .createdAt(p.getCreatedAt())
                                         .updatedAt(p.getUpdatedAt())
                                         .attachments(liteAttachments)
@@ -1682,6 +2134,27 @@ public class PostsServiceImpl implements PostsService {
                         .build());
             }
 
+            // 获取Redis中的增量数据（点赞、评论、阅读）
+            String likeKey = String.format(POST_LIKE_FLUSH_KEY_FMT, p.getId());
+            String commentKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, p.getId());
+            String viewKey = String.format(POST_VIEW_FLUSH_KEY_FMT, p.getId());
+
+            List<String> keys = java.util.Arrays.asList(likeKey, commentKey, viewKey);
+            List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
+
+            int likeDelta = 0;
+            int commentDelta = 0;
+            int viewDelta = 0;
+
+            if (values != null && values.size() == 3) {
+                if (StrUtil.isNotBlank(values.get(0)))
+                    likeDelta = Integer.parseInt(values.get(0));
+                if (StrUtil.isNotBlank(values.get(1)))
+                    commentDelta = Integer.parseInt(values.get(1));
+                if (StrUtil.isNotBlank(values.get(2)))
+                    viewDelta = Integer.parseInt(values.get(2));
+            }
+
             PostListItemVO vo = PostListItemVO.builder()
                     .id(p.getId())
                     .title(p.getTitle())
@@ -1691,10 +2164,10 @@ public class PostsServiceImpl implements PostsService {
                     .authorAvatar(avatar)
                     .topicId(p.getTopicId())
                     .topicName(topicName)
-                    .likeCount(p.getLikeCount())
-                    .commentCount(p.getCommentCount())
-                    .shareCount(p.getShareCount())
-                    .viewCount(p.getViewCount())
+                    .likeCount((p.getLikeCount() == null ? 0 : p.getLikeCount()) + likeDelta)
+                    .commentCount((p.getCommentCount() == null ? 0 : p.getCommentCount()) + commentDelta)
+                    .shareCount(p.getShareCount() == null ? 0 : p.getShareCount())
+                    .viewCount((p.getViewCount() == null ? 0 : p.getViewCount()) + viewDelta)
                     .createdAt(p.getCreatedAt())
                     .updatedAt(p.getUpdatedAt())
                     .attachments(liteAttachments)
@@ -1884,6 +2357,27 @@ public class PostsServiceImpl implements PostsService {
                 TopicVO topicVO = topicService.getTopicCachedById(post.getTopicId().intValue());
                 topicName = topicVO != null ? topicVO.getName() : null;
             }
+            // 获取Redis中的增量数据（点赞、评论、阅读）
+            String likeKey = String.format(POST_LIKE_FLUSH_KEY_FMT, post.getId());
+            String commentKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, post.getId());
+            String viewKey = String.format(POST_VIEW_FLUSH_KEY_FMT, post.getId());
+
+            List<String> keys = java.util.Arrays.asList(likeKey, commentKey, viewKey);
+            List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
+
+            int likeDelta = 0;
+            int commentDelta = 0;
+            int viewDelta = 0;
+
+            if (values != null && values.size() == 3) {
+                if (StrUtil.isNotBlank(values.get(0)))
+                    likeDelta = Integer.parseInt(values.get(0));
+                if (StrUtil.isNotBlank(values.get(1)))
+                    commentDelta = Integer.parseInt(values.get(1));
+                if (StrUtil.isNotBlank(values.get(2)))
+                    viewDelta = Integer.parseInt(values.get(2));
+            }
+
             PostListItemVO vo = PostListItemVO.builder()
                     .id(post.getId())
                     .title(post.getTitle())
@@ -1893,10 +2387,10 @@ public class PostsServiceImpl implements PostsService {
                     .authorAvatar(avatar)
                     .topicId(post.getTopicId())
                     .topicName(topicName)
-                    .likeCount(post.getLikeCount())
-                    .commentCount(post.getCommentCount())
-                    .shareCount(post.getShareCount())
-                    .viewCount(post.getViewCount())
+                    .likeCount((post.getLikeCount() == null ? 0 : post.getLikeCount()) + likeDelta)
+                    .commentCount((post.getCommentCount() == null ? 0 : post.getCommentCount()) + commentDelta)
+                    .shareCount(post.getShareCount() == null ? 0 : post.getShareCount())
+                    .viewCount((post.getViewCount() == null ? 0 : post.getViewCount()) + viewDelta)
                     .createdAt(post.getCreatedAt())
                     .updatedAt(post.getUpdatedAt())
                     .attachments(liteAttachments)

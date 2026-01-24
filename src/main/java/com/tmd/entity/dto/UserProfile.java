@@ -23,4 +23,5 @@ public class UserProfile {
     private UserStatus status;
     private Integer accountDays;
     private Boolean isFirst;
+    private Long id;
 }

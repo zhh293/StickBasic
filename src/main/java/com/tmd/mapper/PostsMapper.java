@@ -62,4 +62,18 @@ public interface PostsMapper {
 
     @Update("update posts set comment_count = IFNULL(comment_count,0) + #{delta} where id = #{id}")
     int incrCommentCount(@Param("id") Long id, @Param("delta") Integer delta);
+
+    @Update("update posts set collect_count = IFNULL(collect_count,0) + #{delta} where id = #{id}")
+    void incrCollectCount(Long postId, int delta);
+
+    @Update("<script>" +
+            "UPDATE posts SET " +
+            "<if test='title != null'>title = #{title},</if>" +
+            "<if test='content != null'>content = #{content},</if>" +
+            "<if test='topicId != null'>topic_id = #{topicId},</if>" +
+            "<if test='status != null'>status = #{status},</if>" +
+            "updated_at = NOW() " +
+            "WHERE id = #{id}" +
+            "</script>")
+    int update(Post post);
 }

@@ -3,10 +3,12 @@ package com.tmd.controller;
 
 import com.tmd.entity.dto.CommentCreateDTO;
 import com.tmd.entity.dto.PostCreateDTO;
+import com.tmd.entity.dto.PostUpdateDTO;
 import com.tmd.entity.dto.Result;
 import com.tmd.service.PostsService;
 import com.tmd.tools.BaseContext;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RBloomFilter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.*;
@@ -94,6 +96,23 @@ public class PostsController {
             return Result.error("参数错误");
         }
         return postsService.toggleLike(postId);
+    }
+    @PutMapping
+    public Result updatePosts(@RequestBody PostUpdateDTO postUpdateDTO){
+        Long userId = BaseContext.get();
+        if (userId == null || userId == ERROR_CODE) {
+            return Result.error("验证失败,非法访问");
+        }
+        return postsService.updatePosts(postUpdateDTO);
+    }
+
+    @GetMapping("/{postId}/comments")
+    public Result getPostComments(@PathVariable Long postId,
+                                  @RequestParam(defaultValue = "1") Integer page,
+                                  @RequestParam(defaultValue = "10") Integer size,
+                                  @RequestParam(defaultValue = "latest") String sortBy) {
+        log.info("Fetching comments for post {}: page={}, size={}, sortBy={}", postId, page, size, sortBy);
+        return postsService.getPostComments(postId, page, size, sortBy);
     }
 
     @GetMapping("/likes")

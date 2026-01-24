@@ -18,8 +18,17 @@ public interface UserMapper {
     @Select("select * from users where username=#{username};")
     UserData check(String name);
 
-    @Select("select username, nickname, avatar, email,homepage_background as homepageBackground, personal_signature as personalSignature, status, account_days as accountDays from users where id=#{userId};")
+    @Select("select id, username, nickname, avatar, email,homepage_background as homepageBackground, personal_signature as personalSignature, status, account_days as accountDays from users where id=#{userId};")
     UserProfile getProfile(Long userId);
+
+    @Select("<script>" +
+            "SELECT id, username, nickname, avatar, email, homepage_background as homepageBackground, personal_signature as personalSignature, status, account_days as accountDays " +
+            "FROM users WHERE id IN " +
+            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>" +
+            "#{id}" +
+            "</foreach>" +
+            "</script>")
+    java.util.List<UserProfile> selectBatchProfiles(@Param("ids") java.util.List<Long> ids);
 
     UserData findByUserIdAndPassword(@Param("uid") long uid, @Param("oldPassword") String oldPassword);
 

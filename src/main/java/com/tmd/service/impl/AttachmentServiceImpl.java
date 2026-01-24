@@ -1,5 +1,6 @@
 package com.tmd.service.impl;
 
+import com.alibaba.fastjson.JSONObject;
 import com.tmd.config.RedisCache;
 import com.tmd.entity.dto.AliOssUtil;
 import com.tmd.entity.dto.Attachment;
@@ -196,7 +197,8 @@ public class AttachmentServiceImpl implements AttachmentService {
 
         // 先查 Redis 缓存
         String cacheKey = CACHE_KEY_PREFIX_ID + id;
-        Attachment attachment = redisCache.getCacheObject(cacheKey);
+        Object cacheObject = redisCache.getCacheObject(cacheKey);
+        Attachment attachment = JSONObject.parseObject(cacheObject.toString(), Attachment.class);
         if (attachment != null) {
             log.debug("从Redis缓存获取附件: id={}", id);
             return attachment;
@@ -223,7 +225,10 @@ public class AttachmentServiceImpl implements AttachmentService {
 
         // 先查 Redis 缓存
         String cacheKey = CACHE_KEY_PREFIX_BUSINESS + businessType + ":" + businessId;
-        List<Attachment> attachments = redisCache.getCacheList(cacheKey);
+        List<Object> cacheList = redisCache.getCacheList(cacheKey);
+        List<Attachment> attachments = cacheList.stream()
+                .map(json -> JSONObject.parseObject(json.toString(), Attachment.class))
+                .toList();
         if (attachments != null && !attachments.isEmpty()) {
             log.debug("从Redis缓存获取业务附件列表: businessType={}, businessId={}", businessType, businessId);
             return attachments;
@@ -269,7 +274,11 @@ public class AttachmentServiceImpl implements AttachmentService {
         java.util.List<Long> missed = new java.util.ArrayList<>();
         for (Long bid : ids) {
             String cacheKey = CACHE_KEY_PREFIX_BUSINESS + businessType + ":" + bid;
-            java.util.List<Attachment> cached = redisCache.getCacheList(cacheKey);
+            List<Object> cacheList = redisCache.getCacheList(cacheKey);
+            //里面都是JSONOBJECT对象，需要转化为Attachment对象
+            List<Attachment> cached = cacheList.stream()
+                    .map(json -> JSONObject.parseObject(json.toString(), Attachment.class))
+                    .toList();
             // 注意：即便缓存是空列表，也视为命中，避免穿透
             if (cached != null && !cached.isEmpty()) {
                 combined.addAll(cached);
@@ -326,7 +335,8 @@ public class AttachmentServiceImpl implements AttachmentService {
 
         // 先查 Redis 缓存
         String cacheKey = CACHE_KEY_PREFIX_FILE_ID + fileId;
-        Attachment attachment = redisCache.getCacheObject(cacheKey);
+        Object cacheObject = redisCache.getCacheObject(cacheKey);
+        Attachment attachment = JSONObject.parseObject(cacheObject.toString(), Attachment.class);
         if (attachment != null) {
             log.debug("从Redis缓存获取附件: fileId={}", fileId);
             return attachment;
@@ -355,7 +365,10 @@ public class AttachmentServiceImpl implements AttachmentService {
 
         // 先查 Redis 缓存
         String cacheKey = CACHE_KEY_PREFIX_UPLOADER + uploaderId;
-        List<Attachment> attachments = redisCache.getCacheList(cacheKey);
+        List<Object> cacheList = redisCache.getCacheList(cacheKey);
+        List<Attachment> attachments = cacheList.stream()
+                .map(json -> JSONObject.parseObject(json.toString(), Attachment.class))
+                .toList();
         if (attachments != null && !attachments.isEmpty()) {
             log.debug("从Redis缓存获取上传者附件列表: uploaderId={}", uploaderId);
             return attachments;

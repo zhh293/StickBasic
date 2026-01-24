@@ -2,6 +2,7 @@ package com.tmd.service;
 
 import com.tmd.entity.dto.CommentCreateDTO;
 import com.tmd.entity.dto.PostCreateDTO;
+import com.tmd.entity.dto.PostUpdateDTO;
 import com.tmd.entity.dto.Result;
 
 public interface PostsService {
@@ -38,4 +39,7 @@ public interface PostsService {
     Result createComment(Long userId, Long postId, CommentCreateDTO dto);
     Result createReplyComment(Long userId, Long postId, Long commentId, CommentCreateDTO dto);
     Result deleteComment(Long userId, Long commentId);
+    Result getPostComments(Long postId, Integer page, Integer size, String sortBy);
+
+    Result updatePosts(PostUpdateDTO postUpdateDTO);
 }

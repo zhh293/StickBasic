@@ -14,4 +14,5 @@ import java.util.List;
 public class PageResult {
         private Long total; //总记录数
         private List rows; //当前页数据列表
+        private Integer currentPage;
 }
