@@ -1,0 +1,3 @@
+INSERT INTO sticknew.mail (id, sender_id, stamp_type, stamp_content, sender_nickname, recipient_email, content, status, read_at, created_at) VALUES (1, 1, '夏日', '开心捏', 'zhh', '软件内人员', '这是内容', 'sent', null, '2025-12-24 11:06:35');
+INSERT INTO sticknew.mail (id, sender_id, stamp_type, stamp_content, sender_nickname, recipient_email, content, status, read_at, created_at) VALUES (2, 1, 'love', '1111', '11111', '软件内人员', '1111111212121', 'sent', null, '2026-01-27 09:54:07');
+INSERT INTO sticknew.mail (id, sender_id, stamp_type, stamp_content, sender_nickname, recipient_email, content, status, read_at, created_at) VALUES (3, 1, 'love', 'sdfgsdgd', 'sffsdf', '软件内人员', 'afgsdgf', 'sent', null, '2026-01-27 18:36:23');

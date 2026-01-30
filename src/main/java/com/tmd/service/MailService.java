@@ -5,7 +5,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 public interface MailService {
-    MailVO getMailById(Integer mailId);
+    MailVO getMailById(String mailId);
 
     ScrollResult getAllMails(MailPackage mailPackage);
 

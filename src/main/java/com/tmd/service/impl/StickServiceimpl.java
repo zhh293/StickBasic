@@ -35,7 +35,11 @@ public class StickServiceimpl implements StickService {
 
         //3.封装并返回
         PageInfo<StickVO> pageInfo = new PageInfo<>(stickVOList);
-        return new PageResult(pageInfo.getTotal(), pageInfo.getList());
+        return PageResult.builder()
+                .rows(pageInfo.getList())
+                .currentPage(pageInfo.getPageNum())
+                .total(pageInfo.getTotal())
+                .build();
     }
 
     @Override

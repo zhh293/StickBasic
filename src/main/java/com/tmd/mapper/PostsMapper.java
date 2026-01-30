@@ -33,6 +33,17 @@ public interface PostsMapper {
     long countByTopic(@Param("topicId") Long topicId,
             @Param("status") String status);
 
+    List<Post> selectPageByUser(@Param("userId") Long userId,
+            @Param("type") String type,
+            @Param("status") String status,
+            @Param("sort") String sort,
+            @Param("offset") Integer offset,
+            @Param("size") Integer size);
+
+    long countByUser(@Param("userId") Long userId,
+            @Param("type") String type,
+            @Param("status") String status);
+
     List<Post> selectLatestIds(@Param("type") String type,
             @Param("status") String status,
             @Param("limit") Integer limit);

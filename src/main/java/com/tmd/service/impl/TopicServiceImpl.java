@@ -21,10 +21,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -89,6 +86,8 @@ public class TopicServiceImpl implements TopicService {
                 if (b) {
                     threadPoolConfig.threadPoolExecutor().execute(() -> {
                         List<Topic> topics = topicMapper.getAllTopics();
+                        log.info("从数据库中查出来所有的帖子，然后插入到redis中{}", topics);
+                        log.error("从数据库中查出来所有的帖子，然后插入到redis中{}", topics);
                         if (topics == null || topics.isEmpty()) return;
                         int batchSize = 500;
                         for (int i = 0; i < topics.size(); i += batchSize) {
@@ -114,8 +113,17 @@ public class TopicServiceImpl implements TopicService {
             List<Topic> list = set.stream().map((json) -> {
                 return JSONUtil.toBean(json, Topic.class);
             }).toList();
+            for (Topic topic : list){
+                long l = postsMapper.countByTopic(topic.getId(), "published");
+                topic.setPostCount((int) l);
+                topic.setFollowerCount(Objects.requireNonNull(stringRedisTemplate.opsForZSet().count("topic:follow:" + topic.getId(), 0, System.currentTimeMillis())).intValue());
+            }
             Long total = stringRedisTemplate.opsForZSet().zCard(key);
-            PageResult pageResult = new PageResult(total, list);
+            PageResult pageResult = PageResult.builder()
+                    .currentPage(page)
+                    .total(total)
+                    .rows(list)
+                    .build();
             return Result.success(pageResult);
         }
     }
@@ -294,7 +302,12 @@ public class TopicServiceImpl implements TopicService {
         // 直接查数据库算了，不想用缓存了，太累了
         PageHelper.startPage(page, size);
         Page<TopicFollowVO> page1 = topicFollowMapper.getTopicFollowers(topicId);
-        PageResult pageResult = new PageResult(page1.getTotal(), page1.getResult());
+        PageResult pageResult = PageResult
+                .builder()
+                .total(page1.getTotal())
+                .rows(page1.getResult())
+                .currentPage(page)
+                .build();
         return Result.success(pageResult);
     }
 
@@ -325,10 +338,10 @@ public class TopicServiceImpl implements TopicService {
             Integer size,
             String sort,
             String status) throws InterruptedException {
-        RBloomFilter<Integer> postBloom = redissonClient.getBloomFilter("bf:topic:id");
-        if (!postBloom.contains(topicId)) {
-            return Result.error("话题不存在");
-        }
+//        RBloomFilter<Integer> postBloom = redissonClient.getBloomFilter("bf:topic:id");
+//        if (!postBloom.contains(topicId)) {
+//            return Result.error("话题不存在");
+//        }
         if (page == null || page < 1)
             page = 1;
         if (size == null || size < 1)
@@ -350,10 +363,13 @@ public class TopicServiceImpl implements TopicService {
                 totalResult = postsMapper.countByTopic(Long.valueOf(topicId), status);
                 stringRedisTemplate.opsForValue().set(totalKey, totalResult.toString(), TOPIC_TOTAL_TTL_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
             }
-            return Result.success(new PageResult(
-                    totalResult,
-                    posts
-            ));
+            return Result.success(
+                    PageResult.builder()
+                            .total(totalResult)
+                            .currentPage(page)
+                            .rows(posts)
+                            .build()
+            );
         }
 
 //         未命中：尝试加锁，命中锁则同步恢复缓存；无论如何直接查询并返回数据
@@ -426,10 +442,13 @@ public class TopicServiceImpl implements TopicService {
                         return;
                     }
                 });
-                return Result.success(new PageResult(
-                        (long) posts.size(),
-                        items
-                ));
+                return Result.success(
+                        PageResult.builder()
+                                .rows( items)
+                                .total(postsMapper.countByTopic(Long.valueOf(topicId), status))
+                                .currentPage(page)
+                                .build()
+                );
             }catch (Exception e){
                 log.error("查询失败{}", e.getMessage());
                 return Result.error("服务器繁忙，请稍后再试");
@@ -444,10 +463,13 @@ public class TopicServiceImpl implements TopicService {
                 }
             }
         }
-        return Result.success(new PageResult(
-                0L,
-                List.of()
-        ));
+        return Result.success(
+                PageResult.builder()
+                        .rows(new java.util.ArrayList<>())
+                        .total(0L)
+                        .currentPage(page)
+                        .build()
+        );
     }
 
 

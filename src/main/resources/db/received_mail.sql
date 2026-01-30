@@ -1,0 +1,1 @@
+INSERT INTO sticknew.received_mail (id, recipient_id, sender_id, content, stamp_type, sender_nickname, original_mail_id, status, read_at, created_at) VALUES (539365927221723137, 1, 1, '这是内容', '夏日', 'zhh', 1, 'read', null, '2025-12-24 11:35:16');

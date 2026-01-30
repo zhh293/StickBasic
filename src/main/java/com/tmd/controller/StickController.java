@@ -100,7 +100,11 @@ public class StickController {
                 int toIndex = Math.min(fromIndex + pageSize, total);
 // 构造 PageResult
                 List<StickVO> pagedResult = filteredList.subList(fromIndex, toIndex);
-                PageResult result = new PageResult((long) total, pagedResult);
+                PageResult result = PageResult.builder()
+                        .total((long) total)
+                        .rows(pagedResult)
+                        .currentPage(page)
+                        .build();
                 return Result.success(result);
             }
             stickQueryParam.setUserId(uid);

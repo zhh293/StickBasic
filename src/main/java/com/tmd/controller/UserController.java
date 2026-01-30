@@ -22,6 +22,10 @@ import java.util.Map;
 
 import static com.tmd.constants.common.ERROR_CODE;
 
+
+
+//https://www.doubao.com/thread/w864d993e7fd9b594
+
 @Slf4j
 @RestController
 @RequestMapping("/api/user")
@@ -73,7 +77,12 @@ public class UserController {
         stringRedisTemplate.delete("captcha:"+captchaId);
         return Result.error("用户名或密码错误");
     }
-    @GetMapping("/user/profile")
+    @GetMapping("/profile/{userId}")
+    public Result getUserProfileById(@PathVariable Long userId) {
+        log.info("用户正在获取用户信息:{}", userId);
+        return Result.success(userService.getProfile(userId));
+    }
+    @GetMapping("/profile")
     public Result getUserProfile(
             @RequestHeader("authentication") String authorization
     ) {
@@ -85,7 +94,7 @@ public class UserController {
             if(!StringUtils.hasText(s)){
                 return Result.error("验证失败,非法访问");
             }
-            LoginUser loginUser = JSONUtil.toBean(s, LoginUser.class);
+//            LoginUser loginUser = JSONUtil.toBean(s, LoginUser.class);
             log.info("用户id为{}",userId);
             log.info("threadLocal所取得id为{}",BaseContext.get());
             UserProfile userProfile = userService.getProfile(userId);
@@ -188,7 +197,7 @@ public class UserController {
 
 
 
-    @PutMapping("/user/profile")
+    @PutMapping("/profile")
     public Result updateUserProfile(@RequestBody UserUpdateDTO userUpdateDTO) {
         log.info("用户正在尝试更新个人信息:{}", userUpdateDTO);
         Long id=BaseContext.get();

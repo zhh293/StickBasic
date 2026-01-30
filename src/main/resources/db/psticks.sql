@@ -1,0 +1,4 @@
+INSERT INTO sticknew.psticks (id, user_id, name, content, created_at, updated_at, stick_id, spirits) VALUES (1, 1, '工作计划', '完成项目A的开发', '2026-01-21 23:05:32.000000', '2026-01-21 23:05:32.000000', null, null);
+INSERT INTO sticknew.psticks (id, user_id, name, content, created_at, updated_at, stick_id, spirits) VALUES (2, 1, '学习目标', '掌握Spring Boot高级特性', '2026-01-21 23:05:32.000000', '2026-01-21 23:05:32.000000', null, null);
+INSERT INTO sticknew.psticks (id, user_id, name, content, created_at, updated_at, stick_id, spirits) VALUES (3, 2, '生活记录', '周末去爬山', '2026-01-21 23:05:32.000000', '2026-01-21 23:05:32.000000', null, null);
+INSERT INTO sticknew.psticks (id, user_id, name, content, created_at, updated_at, stick_id, spirits) VALUES (4, 3, '张哲闻', '你就个大帅逼', '2026-01-22 00:00:00.000000', null, 11, 5);

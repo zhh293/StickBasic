@@ -16,7 +16,7 @@ public class mailController {
     @Autowired
     private MailService mailService;
     @GetMapping("/{mailId}")
-    public Result getMailById(@PathVariable Integer mailId) {
+    public Result getMailById(@PathVariable String mailId) {
         return Result.success(mailService.getMailById(mailId));
     }
 
@@ -25,7 +25,7 @@ public class mailController {
     @GetMapping
     public Result getAllMails(@RequestParam(defaultValue = "0") Integer scroll, @RequestParam(defaultValue = "10") Integer size,@RequestParam(defaultValue = "0") Long max
 
-    ,@RequestParam(defaultValue = "all") String status) {
+    ,@RequestParam(defaultValue = "sent") String status) {
         if(max == 0){
             max = System.currentTimeMillis();
         }

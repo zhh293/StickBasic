@@ -11,7 +11,7 @@ import java.util.List;
 @Mapper
 public interface MailMapper {
     @Select("select * from mail where id = #{mailId}")
-    mail selectById(Integer mailId);
+    mail selectById(Long mailId);
 
     List<mail> selectByIds(List<Long> ids);
 

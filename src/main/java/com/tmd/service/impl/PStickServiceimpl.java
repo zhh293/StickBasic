@@ -36,7 +36,10 @@ public class PStickServiceimpl implements PStickService {
 
         //3.封装并返回
         PageInfo<PStickVO> pageInfo = new PageInfo<>(pStickVOList);
-        return new PageResult(pageInfo.getTotal(), pageInfo.getList());
+        return PageResult.builder()
+                .rows(pageInfo.getList())
+                .total(pageInfo.getTotal())
+                .build();
     }
 
     @Override

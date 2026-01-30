@@ -134,6 +134,58 @@
         </where>
     </select>
 
+    <select id="selectPageByUser" resultType="com.tmd.entity.dto.Post">
+        SELECT id,
+               user_id AS userId,
+               topic_id AS topicId,
+               title,
+               content,
+               post_type AS postType,
+               status,
+               like_count AS likeCount,
+               comment_count AS commentCount,
+               share_count AS shareCount,
+               view_count AS viewCount,
+               publish_location AS publishLocation,
+               latitude,
+               longitude,
+               created_at AS createdAt,
+               updated_at AS updatedAt
+        FROM posts
+        <where>
+            AND user_id = #{userId}
+            <if test="type != null and type != ''">
+                AND post_type = #{type}
+            </if>
+            <if test="status != null and status != ''">
+                AND status = #{status}
+            </if>
+        </where>
+        <choose>
+            <when test="sort == 'hot'">
+                ORDER BY view_count DESC, created_at DESC
+            </when>
+            <otherwise>
+                ORDER BY created_at DESC
+            </otherwise>
+        </choose>
+        LIMIT #{offset}, #{size}
+    </select>
+
+    <select id="countByUser" resultType="long">
+        SELECT COUNT(1)
+        FROM posts
+        <where>
+            AND user_id = #{userId}
+            <if test="type != null and type != ''">
+                AND post_type = #{type}
+            </if>
+            <if test="status != null and status != ''">
+                AND status = #{status}
+            </if>
+        </where>
+    </select>
+
     <!-- 最新排序用于滚动分页：只取 id 与 created_at，限定上限以避免一次性加载过多 -->
     <select id="selectLatestIds" resultType="com.tmd.entity.dto.Post">
         SELECT id,

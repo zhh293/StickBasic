@@ -2,6 +2,7 @@ package com.tmd.service.impl;
 
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
+import com.alibaba.fastjson.JSONObject;
 import com.tmd.config.RedisCache;
 import com.tmd.entity.dto.UserProfile;
 import com.tmd.entity.dto.UserUpdateDTO;
@@ -86,16 +87,19 @@ public class UserServiceimpl implements UserService, UserDetailsService {
         log.info("正在读取用户基础资料: userId={}", userId);
         String profileKey = "user:profile:" + userId;
         String s = stringRedisTemplate.opsForValue().get(profileKey);
-        UserProfile userProfile = JSONUtil.toBean(s, UserProfile.class);
-        if (userProfile == null) {
+        UserProfile userProfile;
+        log.info(":读取的数据{}", s);
+        if (StrUtil.isBlank(s)) {
             userProfile = userMapper.getProfile(userId);
             log.info(":读取的数据{}", userProfile);
             if (userProfile != null) {
                 // 缓存基础资料 10 分钟，避免频繁 DB 访问
                 stringRedisTemplate.opsForValue().set("user:profile:" + userId, JSONUtil.toJsonStr(userProfile), 10, TimeUnit.MINUTES);
             }
-        }
-        String dailyBookmark=redisCache.getCacheObject("bookmark:"+userId);
+        }else
+            userProfile = JSONObject.parseObject(s, UserProfile.class);
+        log.info(":反序列化用户数据{}", userProfile);
+        String dailyBookmark=stringRedisTemplate.opsForValue().get("bookmark:" + userId);
         log.info(":读取的书签{}", dailyBookmark);
         if(StrUtil.isNotBlank(dailyBookmark)){
             userProfile.setIsFirst(false);

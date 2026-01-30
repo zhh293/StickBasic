@@ -42,4 +42,8 @@ public interface PostsService {
     Result getPostComments(Long postId, Integer page, Integer size, String sortBy);
 
     Result updatePosts(PostUpdateDTO postUpdateDTO);
+
+    Result getPost(Long postId);
+
+    Result getPostsByUser(Long userId, Integer page, Integer size, String type, String status, String sort);
 }

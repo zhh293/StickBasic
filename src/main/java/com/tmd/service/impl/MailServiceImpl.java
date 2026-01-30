@@ -61,7 +61,7 @@ public class MailServiceImpl implements MailService {
     private static final long INSIGHT_CACHE_TTL_MINUTES = 2;
 
     @Override
-    public MailVO getMailById(Integer mailId) {
+    public MailVO getMailById(String mailId) {
         // 先查redis，缓存中有则直接返回
         String s = stringRedisTemplate.opsForValue().get("mail:" + mailId);
         // 缓存中没有则查数据库
@@ -97,7 +97,8 @@ public class MailServiceImpl implements MailService {
             meterRegistry.counter("mail.cache.miss").increment();
         } catch (Exception ignored) {
         }
-        mail mail = mailMapper.selectById(mailId);
+        mail mail = mailMapper.selectById(Long.valueOf(mailId));
+        log.error("查询到的邮件为{}", mail);
         // 数据库中没查到则返回null，而且使用缓存穿透
         if (mail == null) {
             stringRedisTemplate.opsForValue().set("mail:" + mailId, "", MAIL_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
@@ -277,7 +278,7 @@ public class MailServiceImpl implements MailService {
             mail mail;
             if (StrUtil.isBlank(s)) {
                 // 查询数据库
-                mail = mailMapper.selectById(mailId.intValue());
+                mail = mailMapper.selectById(mailId.longValue());
                 if (mail == null) {
                     return Result.error("原始邮件不存在或已删除");
                 }
@@ -387,7 +388,7 @@ public class MailServiceImpl implements MailService {
                 mail mail;
                 if (StrUtil.isBlank(s1)) {
                     // 查询数据库
-                    mail = mailMapper.selectById(receivedMail.getOriginalMailId().intValue());
+                    mail = mailMapper.selectById(receivedMail.getOriginalMailId().longValue());
                     if (mail == null) {
                         return PageResult
                                 .builder()
@@ -418,7 +419,7 @@ public class MailServiceImpl implements MailService {
                             .stampType(receivedMail.getStampType())
                             .reviewContent(receivedMail.getContent())
                             .createdAt(receivedMail.getCreatedAt())
-                            .content(getMailById(receivedMail.getOriginalMailId().intValue()).getContent())
+                            .content(getMailById(receivedMail.getOriginalMailId().toString()).getContent())
                             .build())
                     .collect(Collectors.toList());
             // 恢复缓存，缓存的key为mail:push:userId
@@ -458,7 +459,7 @@ public class MailServiceImpl implements MailService {
         if (raw != null && !raw.isEmpty()) {
             for (String r : raw) {
                 MailComment mc = JSONUtil.toBean(r, MailComment.class);
-                MailVO mv = getMailById(mc.getMailId().intValue());
+                MailVO mv = getMailById(mc.getMailId().toString());
                 MailCommentItemVO vo = MailCommentItemVO.builder()
                         .mailId(mc.getMailId())
                         .commentContent(mc.getContent())
@@ -484,7 +485,7 @@ public class MailServiceImpl implements MailService {
         }
         if (dbList != null) {
             for (MailComment mc : dbList) {
-                MailVO mv = getMailById(mc.getMailId().intValue());
+                MailVO mv = getMailById(mc.getMailId().toString());
                 MailCommentItemVO vo = MailCommentItemVO.builder()
                         .mailId(mc.getMailId())
                         .commentContent(mc.getContent())
@@ -532,7 +533,7 @@ public class MailServiceImpl implements MailService {
 
     @Override
     public Result agentInsight(Long mailId) {
-        mail origin = mailMapper.selectById(mailId.intValue());
+        mail origin = mailMapper.selectById(mailId.longValue());
         if (origin == null) {
             return Result.error("原始邮件不存在或已删除");
         }
@@ -593,7 +594,7 @@ public class MailServiceImpl implements MailService {
     @Override
     public Result agentSuggest(Long mailId, Integer count, String style) {
         int c = count == null || count < 1 ? 3 : Math.min(count, 5);
-        mail origin = mailMapper.selectById(mailId.intValue());
+        mail origin = mailMapper.selectById(mailId.longValue());
         if (origin == null) {
             return Result.error("原始邮件不存在或已删除");
         }

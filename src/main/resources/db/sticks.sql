@@ -1,0 +1,12 @@
+INSERT INTO sticknew.sticks (id, user_id, content, created_at, updated_at) VALUES (1, 1, '团队协作很重要', '2026-01-21 23:05:32.000000', '2026-01-21 23:05:32.000000');
+INSERT INTO sticknew.sticks (id, user_id, content, created_at, updated_at) VALUES (2, 1, '持续学习是进步的关键', '2026-01-21 23:05:32.000000', '2026-01-21 23:05:32.000000');
+INSERT INTO sticknew.sticks (id, user_id, content, created_at, updated_at) VALUES (3, 2, '保持好奇心', '2026-01-21 23:05:32.000000', '2026-01-21 23:05:32.000000');
+INSERT INTO sticknew.sticks (id, user_id, content, created_at, updated_at) VALUES (4, 1, '呜呜呜呜呜呜呜', null, null);
+INSERT INTO sticknew.sticks (id, user_id, content, created_at, updated_at) VALUES (5, 1, '测试贴', null, null);
+INSERT INTO sticknew.sticks (id, user_id, content, created_at, updated_at) VALUES (6, 1, '我相信我的帖子', '2026-01-21 23:18:47.000000', '2026-01-21 23:18:47.000000');
+INSERT INTO sticknew.sticks (id, user_id, content, created_at, updated_at) VALUES (7, 1, '哈哈哈哈', '2026-01-21 23:24:16.000000', '2026-01-21 23:24:16.000000');
+INSERT INTO sticknew.sticks (id, user_id, content, created_at, updated_at) VALUES (8, 3, '嘻嘻嘻嘻', '2026-01-22 10:23:08.000000', '2026-01-22 10:23:08.000000');
+INSERT INTO sticknew.sticks (id, user_id, content, created_at, updated_at) VALUES (9, 3, '今天不小心被别人骂了，好难过', '2026-01-22 10:23:40.000000', '2026-01-22 10:23:40.000000');
+INSERT INTO sticknew.sticks (id, user_id, content, created_at, updated_at) VALUES (10, 3, '我今天不小心创到了别人，他们看起来很生气，把我一顿骂。我觉得人生没有希望了', '2026-01-22 10:25:14.000000', '2026-01-22 10:25:14.000000');
+INSERT INTO sticknew.sticks (id, user_id, content, created_at, updated_at) VALUES (11, 3, '张哲闻你就个大帅逼', '2026-01-22 10:26:30.000000', '2026-01-22 10:41:17.000000');
+INSERT INTO sticknew.sticks (id, user_id, content, created_at, updated_at) VALUES (12, 1, '灯火葳蕤，揉皱你眼眉', '2026-01-26 15:00:31.000000', '2026-01-26 15:00:31.000000');

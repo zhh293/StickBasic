@@ -1359,6 +1359,106 @@ public class PostsServiceImpl implements PostsService {
         return Result.success("更新成功");
     }
 
+    @Override
+    public Result getPost(Long postId) {
+        return null;
+    }
+
+    @Override
+    public Result getPostsByUser(Long userId, Integer page, Integer size, String type, String status, String sort) {
+        try {
+            if (userId == null || userId <= 0)
+                return Result.error("参数错误");
+            if (page == null || page < 1)
+                page = 1;
+            if (size == null || size < 1)
+                size = 10;
+            if (StrUtil.isBlank(sort))
+                sort = "latest";
+
+            int offset = (page - 1) * size;
+            List<Post> posts = postsMapper.selectPageByUser(userId, type, status, sort, offset, size);
+
+            List<Long> postIdsBatch = posts.stream().map(Post::getId).collect(Collectors.toList());
+            List<Attachment> allAttachments = attachmentService.getAttachmentsByBusinessBatch("post", postIdsBatch);
+            Map<Long, List<Attachment>> attMap = (allAttachments == null)
+                    ? new java.util.HashMap<>()
+                    : allAttachments.stream()
+                            .filter(a -> a.getBusinessId() != null)
+                            .collect(Collectors.groupingBy(Attachment::getBusinessId));
+
+            List<PostListItemVO> items = new ArrayList<>();
+            for (Post p : posts) {
+                UserProfile profile = userMapper.getProfile(p.getUserId());
+                String username = profile != null ? profile.getUsername() : null;
+                String avatar = profile != null ? profile.getAvatar() : null;
+                String topicName = null;
+                if (p.getTopicId() != null) {
+                    TopicVO topicVO = topicService.getTopicCachedById(p.getTopicId().intValue());
+                    topicName = topicVO != null ? topicVO.getName() : null;
+                }
+                List<Attachment> attachments = attMap.getOrDefault(p.getId(), java.util.Collections.emptyList());
+                List<AttachmentLite> liteAttachments = new ArrayList<>();
+                for (Attachment a : attachments) {
+                    liteAttachments.add(AttachmentLite.builder()
+                            .fileUrl(a.getFileUrl())
+                            .fileType(a.getFileType())
+                            .fileName(a.getFileName())
+                            .build());
+                }
+
+                String likeKey = String.format(POST_LIKE_FLUSH_KEY_FMT, p.getId());
+                String commentKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, p.getId());
+                String viewKey = String.format(POST_VIEW_FLUSH_KEY_FMT, p.getId());
+
+                List<String> keys = java.util.Arrays.asList(likeKey, commentKey, viewKey);
+                List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
+
+                int likeDelta = 0;
+                int commentDelta = 0;
+                int viewDelta = 0;
+
+                if (values != null && values.size() == 3) {
+                    if (StrUtil.isNotBlank(values.get(0)))
+                        likeDelta = Integer.parseInt(values.get(0));
+                    if (StrUtil.isNotBlank(values.get(1)))
+                        commentDelta = Integer.parseInt(values.get(1));
+                    if (StrUtil.isNotBlank(values.get(2)))
+                        viewDelta = Integer.parseInt(values.get(2));
+                }
+
+                PostListItemVO vo = PostListItemVO.builder()
+                        .id(p.getId())
+                        .title(p.getTitle())
+                        .content(p.getContent())
+                        .userId(p.getUserId())
+                        .authorUsername(username)
+                        .authorAvatar(avatar)
+                        .topicId(p.getTopicId())
+                        .topicName(topicName)
+                        .likeCount((p.getLikeCount() == null ? 0 : p.getLikeCount()) + likeDelta)
+                        .commentCount((p.getCommentCount() == null ? 0 : p.getCommentCount()) + commentDelta)
+                        .shareCount(p.getShareCount() == null ? 0 : p.getShareCount())
+                        .viewCount((p.getViewCount() == null ? 0 : p.getViewCount()) + viewDelta)
+                        .createdAt(p.getCreatedAt())
+                        .updatedAt(p.getUpdatedAt())
+                        .attachments(liteAttachments)
+                        .build();
+                items.add(vo);
+            }
+
+            long total = postsMapper.countByUser(userId, type, status);
+            PageResult pageResult = PageResult.builder()
+                    .rows(items)
+                    .total(total)
+                    .currentPage(page)
+                    .build();
+            return Result.success(pageResult);
+        } catch (Exception e) {
+            return Result.error("服务器繁忙");
+        }
+    }
+
     private void cacheListHelper(List<Post> posts, String cacheKey) {
         if (posts == null || posts.isEmpty()) {
             stringRedisTemplate.opsForValue().set(cacheKey, "[]", ttlJitter(LIST_TTL_SECONDS), TimeUnit.SECONDS);
@@ -2398,6 +2498,9 @@ public class PostsServiceImpl implements PostsService {
             return Result.success(vo);
         } catch (Exception e) {
             return Result.error("解析分享链接失败");
+        }finally {
+            stringRedisTemplate.delete(String.format(SHARE_TOKEN_KEY_FMT, token));
+            log.info("用户打开分享链接成功:{}", token);
         }
     }
 

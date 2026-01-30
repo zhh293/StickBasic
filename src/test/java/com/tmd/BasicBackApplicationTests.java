@@ -212,7 +212,7 @@ class BasicBackApplicationTests {
         FileUtils.writeByteArrayToFile(new File("E:\\BasicBack\\src\\main\\resources\\image.png"), bytes);
         System.out.println(imagesResponse.getData().get(0).getUrl());
     }
-
+  //  [URL REMOVED FOR SECURITY]
     private String getNowWeather() throws URISyntaxException {
         //yiketianqi的APPID为26182893
         //一刻天气的APPSecret为S5vqX2pN

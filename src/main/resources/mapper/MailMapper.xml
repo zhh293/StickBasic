@@ -9,9 +9,10 @@
 
     <select id="selectByIds" resultType="com.tmd.entity.dto.mail">
         <!--批量查询-->
- 　　　　 select * from mail where id in
+        select * from mail where id in
         <foreach item="item" index="index" collection="ids" open="(" separator="," close=")">
             #{item}
         </foreach>
     </select>
+
 </mapper>

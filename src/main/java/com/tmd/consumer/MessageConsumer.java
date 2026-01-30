@@ -25,6 +25,8 @@ import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiImageModel;
 import org.springframework.amqp.core.Message;
@@ -39,7 +41,10 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 @Component
@@ -71,6 +76,8 @@ public class MessageConsumer {
 
     @Autowired
     private OpenAiImageModel openAiImageModel;
+    @Autowired
+    private RedissonClient redissonClient;
 
     /**
      * 从URL下载图片内容
@@ -90,6 +97,7 @@ public class MessageConsumer {
             int responseCode = connection.getResponseCode();
             if (responseCode == HttpURLConnection.HTTP_OK) {
                 try (InputStream in = connection.getInputStream()) {
+                    log.info("下载图片成功");
                     return in.readAllBytes();
                 }
             } else {
@@ -205,6 +213,21 @@ public class MessageConsumer {
             // 处理Long类型消息（用户ID，用于生成书签）
             else if (content instanceof Long) {
                 Long userId = (Long) content;
+                String lockKey="lock:bookmark:"+content;
+
+                RLock lock = redissonClient.getLock(lockKey);
+                boolean b = lock.tryLock(5, 10, TimeUnit.SECONDS);
+                log.info("获取锁结果: {}", b);
+                if (!b) {
+                    channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
+                    throw new RuntimeException("用户生成书签锁被占用");
+                }
+                String s = stringRedisTemplate.opsForValue().get("bookmark:" + userId);
+                if (s != null) {
+                    log.info("用户生成书签锁被占用: userId={}", userId);
+                    channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
+                    throw new RuntimeException("用户生成书签锁被占用");
+                }
                 log.info("开始为用户生成书签: userId={}", userId);
                 try {
                     // 这里应该是调用大模型生成书签图片URL的代码
@@ -220,27 +243,32 @@ public class MessageConsumer {
                         return;
                     }
 
-                    /*// 生成文件ID（objectKey），使用与CommonController一致的格式
+                    // 生成文件ID（objectKey），使用与CommonController一致的格式
                     String dateDir = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy/MM/dd"));
                     String uuid = UUID.randomUUID().toString().replace("-", "");
                     String fileId = String.format("image/%s/%s.jpg", dateDir, uuid);
 
                     // 上传到OSS
                     String ossUrl = aliOssUtil.upload(imageBytes, fileId);
-                    log.info("书签图片上传成功: userId={}, fileId={}, ossUrl={}", userId, fileId, ossUrl);*/
+                    log.info("书签图片上传成功: userId={}, fileId={}, ossUrl={}", userId, fileId, ossUrl);
 
                     //因为更新太频繁了，所以不存数据库了，直接存到redis里面
-                    /*stringRedisTemplate.opsForValue().set("bookmark:" + userId, ossUrl);
+                    stringRedisTemplate.opsForValue().set("bookmark:" + userId, ossUrl);
                     
                     log.info("书签URL: userId={}, bookmarkUrl={}", userId, ossUrl);
 
                     // 发送WebSocket通知用户书签已生成
                     if (webSocketServer != null && webSocketServer.Open(String.valueOf(userId))) {
                         webSocketServer.sendToUser(String.valueOf(userId), "书签已生成: " + ossUrl);
-                    }*/
+                    }
 
                 } catch (Exception e) {
                     log.error("为用户生成书签失败: userId={}", userId, e);
+                }finally {
+                    if (lock.isHeldByCurrentThread()){
+                        log.info("释放锁成功: {}", lockKey);
+                        lock.unlock();
+                    }
                 }
             }
             // 手动确认消息已消费
