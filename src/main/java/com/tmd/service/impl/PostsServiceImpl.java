@@ -1268,7 +1268,14 @@ public class PostsServiceImpl implements PostsService {
                 }
 
                 if (!keysToDelete.isEmpty()) {
-                    stringRedisTemplate.delete(keysToDelete);
+                    Long deleteCount = stringRedisTemplate.execute((RedisCallback<Long>) connection -> {
+                        byte[][] keysBytes = keysToDelete.stream()
+                                .map(String::getBytes)
+                                .toArray(byte[][]::new);
+                        return connection.unlink(keysBytes);
+                    });
+                    // 日志记录
+                    log.info("Deleted {} keys: {}", deleteCount, keysToDelete);
                 }
 
                 // 6.2 Preheat Cache (Latest List - Global)
