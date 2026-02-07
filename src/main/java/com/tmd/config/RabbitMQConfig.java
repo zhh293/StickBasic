@@ -23,8 +23,10 @@ public class RabbitMQConfig {
     public static final String DIRECT_EXCHANGE = "direct.exchange";
     public static final String DIRECT_QUEUE_1 = "direct.queue.1";
     public static final String DIRECT_QUEUE_2 = "direct.queue.2";
+//    public static final String DIRECT_QUEUE_3= "direct.queue.3";
     public static final String DIRECT_ROUTING_KEY_1 = "direct.routing.key.1";
     public static final String DIRECT_ROUTING_KEY_2 = "direct.routing.key.2";
+    public static final String DIRECT_ROUTING_KEY_3 = "direct.routing.key.3";
 
     // ========================== Topic 交换机示例 ==========================
     // Topic交换机：模糊匹配路由键，支持通配符
@@ -45,6 +47,27 @@ public class RabbitMQConfig {
     public static final String DEAD_LETTER_QUEUE = "dead.letter.queue";
     public static final String DEAD_LETTER_ROUTING_KEY = "dead.letter.routing.key";
     public static final String NORMAL_QUEUE = "normal.queue"; // 会产生死信的普通队列
+
+
+    // ========================== 广播队列配置 ==========================
+    public static final String BROADCAST_EXCHANGE = "broadcast.exchange";
+    public static final String BROADCAST_QUEUE = "broadcast.queue";
+
+
+    @Bean
+    public Queue broadcastQueue() {
+        Map<String, Object> arguments = new HashMap<>(2);
+        arguments.put("x-consumer-mode","broadcast");
+        return QueueBuilder.durable(BROADCAST_QUEUE)
+                .withArguments(arguments)
+                .build();
+    }
+    @Bean
+    public Binding broadcastBinding(Queue broadcastQueue, DirectExchange directExchange) {
+        return BindingBuilder.bind(broadcastQueue)
+                .to(directExchange)
+                .with(DIRECT_ROUTING_KEY_3);
+    }
 
     // 1. Direct交换机配置
     @Bean

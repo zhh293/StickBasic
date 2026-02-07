@@ -108,6 +108,11 @@ public class MessageConsumer {
         }
         return null;
     }
+    @RabbitListener(queues = RabbitMQConfig.BROADCAST_QUEUE,ackMode = "MANUAL")
+    public void consumeBroadcastQueue(MessageDTO message, Channel channel, Message amqpMessage) throws IOException {
+        log.info("【广播队列】收到消息: {}", message);
+        //每个节点都会消费这条消息，这正好替代了redis的订阅模式
+    }
 
     @RabbitListener(queues = RabbitMQConfig.DIRECT_QUEUE_1,ackMode = "MANUAL")
     public void consumeDirectQueue1(MessageDTO message, Channel channel, Message amqpMessage) throws IOException {
