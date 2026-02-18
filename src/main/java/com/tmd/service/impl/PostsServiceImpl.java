@@ -1746,7 +1746,7 @@ public class PostsServiceImpl implements PostsService {
                 .title(dto.getTitle())
                 .content(dto.getContent())
                 .postType(dto.getType())
-                .status(StrUtil.isBlank(dto.getStatus()) ? PostStatus.draft : PostStatus.valueOf(dto.getStatus()))
+                .status(StrUtil.isBlank(dto.getStatus()) ? PostStatus.published : PostStatus.valueOf(dto.getStatus()))
                 .likeCount(0)
                 .commentCount(0)
                 .shareCount(0)
