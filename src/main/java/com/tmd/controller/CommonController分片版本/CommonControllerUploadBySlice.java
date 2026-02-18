@@ -338,8 +338,8 @@ public class CommonControllerUploadBySlice {
                     deleteDirectory(taskDir);
                     redisTemplate.delete(key);
                     break;
-                } catch (Exception e) {
-                    log.warn("重试资源清理失败: taskId={}, 重试次数={}", taskId, i + 1, e);
+                } catch (Exception ex) {
+                    log.warn("重试资源清理失败: taskId={}, 重试次数={}", taskId, i + 1, ex);
                 }
             }
         }
