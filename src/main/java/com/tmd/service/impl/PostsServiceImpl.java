@@ -19,6 +19,7 @@ import org.elasticsearch.client.RestHighLevelClient;
 import org.elasticsearch.script.Script;
 import org.elasticsearch.script.ScriptType;
 import org.redisson.api.RBloomFilter;
+import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.Cursor;
@@ -31,14 +32,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import static com.tmd.constants.common.ERROR_CODE;
 
+
+
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -78,7 +78,7 @@ public class PostsServiceImpl implements PostsService {
     private static final String POSTS_LIST_KEY_FMT = "post:list:%s:%s:%s:%d:%d"; // type:status:sort:page:size
     private static final String POSTS_TOTAL_KEY_FMT = "post:total:%s:%s:%s"; // type:status:sort
     private static final String POSTS_ZSET_KEY_FMT = "post:zset:%s:%s:%s"; // sort:type:status
-    private static final long LIST_TTL_SECONDS = 200; // 列表缓存TTL
+    private static final long LIST_TTL_SECONDS = 300; // 列表缓存TTL
     private static final long TOTAL_TTL_SECONDS = 300; // 总数缓存TTL
     private static final int ZSET_PREFILL_LIMIT = 2000; // ZSet预热最大条数
     private static final String INDEX_POSTS = "posts";
@@ -98,6 +98,11 @@ public class PostsServiceImpl implements PostsService {
     private static final String POST_LIKE_USERS_SET_FMT = "post:like:users:%d";
     private static final String USER_LIKES_SET_FMT = "user:likes:set:%d";
     private static final String POST_LIKE_FLUSH_KEY_FMT = "post:like:flush:%d";
+    private static final String POST_COMMENT_FLUSH_KEY_FMT = "post:comment:flush:%d";
+
+    // 重建缓存相关常量
+    private static final String REBUILD_FLAG_PREFIX = "post:rebuild:flag:";
+    private static final String LOCK_KEY_PREFIX = "post:rebuild:lock:";
     private static final int POST_LIKE_FLUSH_THRESHOLD = 50;
 
     private static final String POST_FAV_USERS_SET_FMT = "post:fav:users:%d";
@@ -174,187 +179,191 @@ public class PostsServiceImpl implements PostsService {
             PageResult pageResult = PageResult.builder().total(total).rows(rows).build();
             return Result.success(pageResult);
         }
-        List<PostListItemVO> items = new ArrayList<>();
-        AtomicLong total = new AtomicLong();
-        log.info("为什么不在getPosts方法里面打印");
-        // 缓存未命中，尝试加锁并异步恢复缓存；返回提示
-        String lockKey = "redisLock:" + listKey;
-        boolean locked = redissonClient.getLock(lockKey).tryLock(-1, 30, TimeUnit.SECONDS);
-        if (locked) {
+
+        // 步骤2：检查是否已有异步重建任务（避免重复触发）
+        String rebuildFlagKey = REBUILD_FLAG_PREFIX + listKey;
+        String rebuildFlag = stringRedisTemplate.opsForValue().get(rebuildFlagKey);
+        if ("true".equals(rebuildFlag)) {
+            // 已有任务在重建，直接返回兜底数据
+            return getFallbackData();
+        }
+
+        // 步骤3：尝试设置重建标记（原子操作，防止多线程重复触发）
+        Boolean flagSet = stringRedisTemplate.opsForValue().setIfAbsent(rebuildFlagKey, "true", 60, TimeUnit.SECONDS);
+        if (flagSet == null || !flagSet) {
+            // 标记设置失败，说明其他线程已触发重建
+            return getFallbackData();
+        }
+
+        // 步骤4：触发异步重建（主线程不持有锁，仅触发任务）
+        final int offset = (page - 1) * size;
+        final String finalSort = sort;
+        final Integer finalSize = size;
+
+        //然后来解释一下为什么异步线程中还需要使用Redisson锁
+//        整体流程（清晰、有条理）
+//        先查缓存，命中直接返回。
+//        缓存未命中，用一个 Redis setIfAbsent 做重建标记，快速判断是否已有线程在重建缓存。
+//        如果已有重建任务，其他请求直接返回兜底数据，不触发异步任务。
+//        如果没有重建任务，主线程只负责触发异步任务，自己不持有锁，立刻返回。
+//        真正的加锁、查库、续约、解锁，全部交给异步线程自己完成。
+//        异步线程内部用 Redisson 分布式锁 保证同一时间只有一个线程去查库重建。
+//        重建完成后，删除重建标记，释放锁。
+//
+//        setIfAbsent 标记 + Redisson 锁是双层保障：
+//        外层标记是轻量拦截，用来挡掉 99% 的并发请求，减少异步任务触发。
+//        但是会有这么几个问题
+//        Redis 主从延迟可能导致多个异步任务同时执行。
+//        重建耗时超过标记过期时间，会重复触发任务。
+        CompletableFuture.runAsync(() -> {
+            // 异步线程自己抢锁、自己处理、自己解锁
+            RLock lock = redissonClient.getFairLock(LOCK_KEY_PREFIX + listKey);
             try {
-                final int offset = (page - 1) * size;
-                String finalSort = sort;
-                Integer finalSize = size;
-                threadPoolConfig.threadPoolExecutor().execute(() -> {
+                // 异步线程抢锁（阻塞抢锁，因为这是唯一的重建线程）
+                // 使用 Redisson 看门狗机制（leaseTime = -1），自动续期，无需手动 Timer
+                boolean locked = lock.tryLock(0, -1, TimeUnit.SECONDS);
+                if (!locked) {
+                    log.warn("异步线程抢锁失败，key={}", listKey);
+                    return;
+                }
+
+                // 双重检查缓存（防止抢锁期间缓存已被重建）
+                String doubleCheckValue = stringRedisTemplate.opsForValue().get(listKey);
+                if (StrUtil.isNotBlank(doubleCheckValue)) {
+                    log.info("缓存已重建，无需重复操作，key={}", listKey);
+                    return;
+                }
+
+                // 步骤6：耗时的查库操作
+                log.info("开始异步重建缓存: key={}", listKey);
+
+                List<PostListItemVO> items = new ArrayList<>();
+                // 查询数据库分页数据
+                List<Post> posts = postsMapper.selectPage(type, status, finalSort, offset, finalSize);
+
+                // 批量查询本页所有帖子的附件
+                List<Long> postIdsBatch = posts.stream().map(Post::getId).collect(Collectors.toList());
+                List<Attachment> allAttachments = attachmentService.getAttachmentsByBusinessBatch("post", postIdsBatch);
+                java.util.Map<Long, java.util.List<Attachment>> attMap = (allAttachments == null)
+                        ? new java.util.HashMap<>()
+                        : allAttachments.stream()
+                                .filter(a -> a.getBusinessId() != null)
+                                .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
+
+                for (Post p : posts) {
+                    // 作者信息（走缓存）
+                    UserProfile profile = userMapper.getProfile(p.getUserId());
+                    String username = profile != null ? profile.getUsername() : null;
+                    String avatar = profile != null ? profile.getAvatar() : null;
+                    // 话题信息
+                    String topicName = null;
+                    if (p.getTopicId() != null) {
+                        TopicVO topicVO = topicService.getTopicCachedById(p.getTopicId().intValue());
+                        topicName = topicVO != null ? topicVO.getName() : null;
+                    }
+                    // 附件
+                    List<Attachment> attachments = attMap.getOrDefault(p.getId(), Collections.emptyList());
+                    List<AttachmentLite> liteAttachments = new ArrayList<>();
+                    for (Attachment a : attachments) {
+                        liteAttachments.add(AttachmentLite.builder()
+                                .fileUrl(a.getFileUrl())
+                                .fileType(a.getFileType())
+                                .fileName(a.getFileName())
+                                .build());
+                    }
+                    // 获取Redis中的增量数据
+                    String likeKey = String.format(POST_LIKE_FLUSH_KEY_FMT, p.getId());
+                    String commentKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, p.getId());
+                    String viewKey = String.format(POST_VIEW_FLUSH_KEY_FMT, p.getId());
+
+                    List<String> keys = Arrays.asList(likeKey, commentKey, viewKey);
+                    List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
+
+                    int likeDelta = 0;
+                    int commentDelta = 0;
+                    int viewDelta = 0;
+
+                    if (values != null && values.size() == 3) {
+                        if (StrUtil.isNotBlank(values.get(0)))
+                            likeDelta = Integer.parseInt(values.get(0));
+                        if (StrUtil.isNotBlank(values.get(1)))
+                            commentDelta = Integer.parseInt(values.get(1));
+                        if (StrUtil.isNotBlank(values.get(2)))
+                            viewDelta = Integer.parseInt(values.get(2));
+                    }
+
+                    PostListItemVO vo = PostListItemVO.builder()
+                            .id(p.getId())
+                            .title(p.getTitle())
+                            .content(p.getContent())
+                            .userId(p.getUserId())
+                            .authorUsername(username)
+                            .authorAvatar(avatar)
+                            .topicId(p.getTopicId())
+                            .topicName(topicName)
+                            .likeCount((p.getLikeCount() == null ? 0 : p.getLikeCount()) + likeDelta)
+                            .commentCount((p.getCommentCount() == null ? 0 : p.getCommentCount()) + commentDelta)
+                            .shareCount(p.getShareCount() == null ? 0 : p.getShareCount())
+                            .viewCount((p.getViewCount() == null ? 0 : p.getViewCount()) + viewDelta)
+                            .createdAt(p.getCreatedAt())
+                            .updatedAt(p.getUpdatedAt())
+                            .attachments(liteAttachments)
+                            .build();
+                    items.add(vo);
+                }
+
+                // 步骤7：写入缓存
+                try {
+                    long total1 = postsMapper.count(type, status);
+                    cachePostsList(finalSort, typeKey, statusKey, items, type, status, listKey, totalKey, total1);
+                    log.info("异步重建缓存成功，key={}", listKey);
+
+                    // Bloom 过滤器维护
                     try {
-                        log.error("为啥不打印消息呢");
-                        log.error("我到这里了。准备开始查询");
-                        // 查询数据库分页数据
-                        List<Post> posts = postsMapper.selectPage(type, status, finalSort, offset, finalSize);
-
-                        // 批量查询本页所有帖子的附件，减少 N 次单查
-                        List<Long> postIdsBatch = posts.stream().map(Post::getId).collect(Collectors.toList());
-                        log.error("批量查询帖子附件: postIds={}", postIdsBatch);
-                        List<Attachment> allAttachments = attachmentService.getAttachmentsByBusinessBatch("post",
-                                postIdsBatch);
-                        java.util.Map<Long, java.util.List<Attachment>> attMap = (allAttachments == null)
-                                ? new java.util.HashMap<>()
-                                : allAttachments.stream()
-                                        .filter(a -> a.getBusinessId() != null)
-                                        .collect(java.util.stream.Collectors.groupingBy(Attachment::getBusinessId));
-
-                        log.error("批量查询帖子附件结果: attMap={}", attMap);
+                        RBloomFilter<Long> postBloom = redissonClient.getBloomFilter("bf:post:id");
+                        postBloom.tryInit(10_000_000L, 0.03);
                         for (Post p : posts) {
-                            // 作者信息（走缓存）
-                            UserProfile profile = userMapper.getProfile(p.getUserId());
-                            String username = profile != null ? profile.getUsername() : null;
-                            String avatar = profile != null ? profile.getAvatar() : null;
-                            // 话题信息
-                            String topicName = null;
-                            if (p.getTopicId() != null) {
-                                TopicVO topicVO = topicService.getTopicCachedById(p.getTopicId().intValue());
-                                topicName = topicVO != null ? topicVO.getName() : null;
-                            }
-                            // 附件（走缓存，批量结果映射）
-                            List<Attachment> attachments = attMap.getOrDefault(p.getId(),
-                                    java.util.Collections.emptyList());
-                            List<AttachmentLite> liteAttachments = new ArrayList<>();
-                            for (Attachment a : attachments) {
-                                liteAttachments.add(AttachmentLite.builder()
-                                        .fileUrl(a.getFileUrl())
-                                        .fileType(a.getFileType())
-                                        .fileName(a.getFileName())
-                                        .build());
-                            }
-                            // 获取Redis中的增量数据（点赞、评论、阅读）
-                            String likeKey = String.format(POST_LIKE_FLUSH_KEY_FMT, p.getId());
-                            String commentKey = String.format(POST_COMMENT_FLUSH_KEY_FMT, p.getId());
-                            String viewKey = String.format(POST_VIEW_FLUSH_KEY_FMT, p.getId());
-
-                            List<String> keys = java.util.Arrays.asList(likeKey, commentKey, viewKey);
-                            List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
-
-                            int likeDelta = 0;
-                            int commentDelta = 0;
-                            int viewDelta = 0;
-
-                            if (values != null && values.size() == 3) {
-                                if (StrUtil.isNotBlank(values.get(0)))
-                                    likeDelta = Integer.parseInt(values.get(0));
-                                if (StrUtil.isNotBlank(values.get(1)))
-                                    commentDelta = Integer.parseInt(values.get(1));
-                                if (StrUtil.isNotBlank(values.get(2)))
-                                    viewDelta = Integer.parseInt(values.get(2));
-                            }
-
-                            PostListItemVO vo = PostListItemVO.builder()
-                                    .id(p.getId())
-                                    .title(p.getTitle())
-                                    .content(p.getContent())
-                                    .userId(p.getUserId())
-                                    .authorUsername(username)
-                                    .authorAvatar(avatar)
-                                    .topicId(p.getTopicId())
-                                    .topicName(topicName)
-                                    .likeCount((p.getLikeCount() == null ? 0 : p.getLikeCount()) + likeDelta)
-                                    .commentCount(
-                                            (p.getCommentCount() == null ? 0 : p.getCommentCount()) + commentDelta)
-                                    .shareCount(p.getShareCount() == null ? 0 : p.getShareCount())
-                                    .viewCount((p.getViewCount() == null ? 0 : p.getViewCount()) + viewDelta)
-                                    .createdAt(p.getCreatedAt())
-                                    .updatedAt(p.getUpdatedAt())
-                                    .attachments(liteAttachments)
-                                    .build();
-                            items.add(vo);
-                        }
-                        // 手动重试
-                        try {
-                            long total1 = postsMapper.count(type, status);
-                            total.set(total1);
-                            cachePostsList(finalSort, typeKey, statusKey, items, type, status, listKey, totalKey,
-                                    total1);
-                        } catch (Exception e) {
-                            log.error("Cache posts list failed after all retries: sort={}, type={}, status={}",
-                                    finalSort, typeKey,
-                                    statusKey, e);
-                        }
-
-                        /*
-                         * try {
-                         * // 获取本类的代理对象
-                         * PostsServiceImpl proxy = (PostsServiceImpl) AopContext.currentProxy();
-                         * proxy.cachePostsList(finalSort, typeKey, statusKey, items, type, status,
-                         * listKey, totalKey);
-                         * } catch (Exception e) {
-                         * log.
-                         * error("Cache posts list failed after all retries: sort={}, type={}, status={}"
-                         * ,
-                         * finalSort, typeKey,
-                         * statusKey, e);
-                         * }
-                         */
-                        // ZSet 分层缓存恢复
-                        // try {
-                        // String zsetKeyLatest = String.format(POSTS_ZSET_KEY_FMT, finalSort, typeKey,
-                        // statusKey);
-                        // for (Post p : posts) {
-                        // double scoreLatest = p.getCreatedAt() == null ? 0D
-                        // : p.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
-                        // stringRedisTemplate.opsForZSet().add(zsetKeyLatest,
-                        // String.valueOf(p.getId()),
-                        // scoreLatest);
-                        // double scoreHot = p.getViewCount() == null ? 0D :
-                        // p.getViewCount().doubleValue();
-                        // String zsetKeyHot = String.format(POSTS_ZSET_KEY_FMT, "hot", typeKey,
-                        // statusKey);
-                        // stringRedisTemplate.opsForZSet().add(zsetKeyHot, String.valueOf(p.getId()),
-                        // scoreHot);
-                        // }
-                        // } catch (Exception e) {
-                        // log.warn("Restore ZSet cache failed: sort={}, type={}, status={}", finalSort,
-                        // typeKey,
-                        // statusKey, e);
-                        // }
-
-                        // Bloom 过滤器维护（用户、话题、帖子）
-                        try {
-                            RBloomFilter<Long> postBloom = redissonClient.getBloomFilter("bf:post:id");
-                            postBloom.tryInit(10_000_000L, 0.03);
-                            RBloomFilter<Long> userBloom = redissonClient.getBloomFilter("bf:user:id");
-                            userBloom.tryInit(10_000_000L, 0.03);
-                            RBloomFilter<Long> topicBloom = redissonClient.getBloomFilter("bf:topic:id");
-                            topicBloom.tryInit(5_000_000L, 0.03);
-                            for (Post p : posts) {
-                                if (p.getId() != null)
-                                    postBloom.add(p.getId());
-                                if (p.getUserId() != null)
-                                    userBloom.add(p.getUserId());
-                                if (p.getTopicId() != null)
-                                    topicBloom.add(p.getTopicId());
-                            }
-                        } catch (Exception e) {
-                            log.warn("Restore bloom filters failed: type={}, status={}, sort={}", typeKey, statusKey,
-                                    finalSort, e);
+                            if (p.getId() != null)
+                                postBloom.add(p.getId());
                         }
                     } catch (Exception e) {
-                        log.error("Restore posts cache failed for key {}", listKey, e);
+                        log.warn("Restore bloom filters failed", e);
                     }
-                });
+                } catch (Exception e) {
+                    log.error("Cache posts list failed: key={}", listKey, e);
+                }
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.error("异步线程抢锁被中断，key={}", listKey, e);
+            } catch (Exception e) {
+                log.error("异步重建缓存异常，key={}", listKey, e);
             } finally {
-                redissonClient.getLock(lockKey).unlock();
+                // 步骤8：清理资源
+                // 解锁
+                if (lock.isHeldByCurrentThread()) {
+                    try {
+                        lock.unlock();
+                        log.info("异步线程解锁成功，key={}", listKey);
+                    } catch (Exception e) {
+                        log.error("异步线程解锁失败，key={}", listKey, e);
+                    }
+                }
+                // 删除重建标记
+                stringRedisTemplate.delete(rebuildFlagKey);
             }
-            PageResult pageResult = PageResult.builder()
-                    .rows(items)
-                    .total(total.get())
-                    .build();
-            return Result.success(pageResult);
-        } else {
-            PageResult pageResult = PageResult.builder()
-                    .rows(Collections.emptyList())
-                    .total(0L)
-                    .build();
-            return Result.success(pageResult);
-        }
+        }, threadPoolConfig.threadPoolExecutor());
+
+        // 主线程快速返回兜底数据
+        return getFallbackData();
+    }
+
+    private Result getFallbackData() {
+        PageResult pageResult = PageResult.builder()
+                .rows(Collections.emptyList())
+                .total(0L)
+                .build();
+        return Result.success(pageResult);
     }
 
     private long ttlJitter(long baseSeconds) {
@@ -624,24 +633,24 @@ public class PostsServiceImpl implements PostsService {
 
                 // 保证点击之后用户能看见立刻的变化，维护体验感
                 // 写入数据库可以不用立刻，批量刷盘
-//                Integer likeCountDb = 0;
-//                try {
-//                    var post = postsMapper.selectById(postId);
-//                    if (post != null && post.getLikeCount() != null)
-//                        likeCountDb = post.getLikeCount();
-//                } catch (Exception ignore) {
-//                }
-//                int pendingDelta = 0;
-//                try {
-//                    String fk = String.format(POST_LIKE_FLUSH_KEY_FMT, postId);
-//                    String v = stringRedisTemplate.opsForValue().get(fk);
-//                    if (StrUtil.isNotBlank(v))
-//                        pendingDelta = Integer.parseInt(v);
-//                } catch (Exception ignore) {
-//                }
-//                boolean finalLiked = targetLike;
-//                // 数据库旧数据加上缓存中缓存的点赞的增量才是当前这个帖子的真正点赞数
-//                int likeCount = likeCountDb + pendingDelta;
+                // Integer likeCountDb = 0;
+                // try {
+                // var post = postsMapper.selectById(postId);
+                // if (post != null && post.getLikeCount() != null)
+                // likeCountDb = post.getLikeCount();
+                // } catch (Exception ignore) {
+                // }
+                // int pendingDelta = 0;
+                // try {
+                // String fk = String.format(POST_LIKE_FLUSH_KEY_FMT, postId);
+                // String v = stringRedisTemplate.opsForValue().get(fk);
+                // if (StrUtil.isNotBlank(v))
+                // pendingDelta = Integer.parseInt(v);
+                // } catch (Exception ignore) {
+                // }
+                // boolean finalLiked = targetLike;
+                // // 数据库旧数据加上缓存中缓存的点赞的增量才是当前这个帖子的真正点赞数
+                // int likeCount = likeCountDb + pendingDelta;
                 boolean finalLiked = targetLike;
                 Long likeCount = stringRedisTemplate.opsForSet().size(POST_LIKE_USERS_SET_FMT);
                 java.util.Map<String, Object> data = new java.util.HashMap<>();
@@ -867,7 +876,7 @@ public class PostsServiceImpl implements PostsService {
     private static final String POST_COMMENT_KEY_FMT = "post:comment:%d";
     private static final String POST_COMMENT_CHILD_KEY_FMT = "post:comment:child:%d";
     private static final String POST_COMMENT_CHILD_COUNT_KEY_FMT = "post:comment:child:count:%d";
-    private static final String POST_COMMENT_FLUSH_KEY_FMT = "post:comment:flush:%d";
+//    private static final String POST_COMMENT_FLUSH_KEY_FMT = "post:comment:flush:%d";
     private static final int POST_COMMENT_FLUSH_THRESHOLD = 50;
     private static final String POST_COMMENT_CONTENT_KEY_FMT = "post:comment:content:%d";
     private static final String POST_COMMENT_DIRTY_SET_KEY = "post:comment:dirty_set";
@@ -2501,7 +2510,7 @@ public class PostsServiceImpl implements PostsService {
             return Result.success(vo);
         } catch (Exception e) {
             return Result.error("解析分享链接失败");
-        }finally {
+        } finally {
             stringRedisTemplate.delete(String.format(SHARE_TOKEN_KEY_FMT, token));
             log.info("用户打开分享链接成功:{}", token);
         }

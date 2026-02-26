@@ -1,0 +1,210 @@
+erDiagram
+    USERS ||--o{ FOLLOW : follows
+    USERS ||--o{ FOLLOW : followed_by
+    USERS ||--o{ MAIL : sends
+    USERS ||--o{ RECEIVED_MAIL : receives
+    USERS ||--o{ POSTS : creates
+    USERS ||--o{ POST_COMMENT : comments
+    USERS ||--o{ LIKES : gives_likes
+    USERS ||--o{ FAVORITE : favorites
+    USERS ||--o{ ATTACHMENT : uploads
+    USERS ||--o{ PSTICKS : creates_personal_sticks
+    USERS ||--o{ STICKS : creates_public_sticks
+    USERS ||--o{ TOPIC : creates
+    USERS ||--o{ TOPIC_FOLLOW : follows_topics
+    USERS ||--o{ USER_BEHAVIOR_LOG : generates_logs
+
+    MAIL ||--o{ RECEIVED_MAIL : delivers_to
+    MAIL ||--o{ ATTACHMENT : has_attachments
+
+    POSTS ||--o{ POST_COMMENT : has_comments
+    POSTS ||--o{ LIKES : receives_likes
+    POSTS ||--o{ FAVORITE : is_favorited
+    POSTS ||--o{ ATTACHMENT : has_attachments
+    POSTS }|--|| TOPIC : belongs_to
+
+    POST_COMMENT ||--o{ POST_COMMENT : replies_to
+    POST_COMMENT ||--o{ LIKES : receives_likes
+    POST_COMMENT ||--o{ ATTACHMENT : has_attachments
+
+    TOPIC ||--o{ TOPIC_FOLLOW : is_followed
+    TOPIC ||--o{ ATTACHMENT : has_cover_image
+
+%% 实体属性定义
+    USERS {
+        bigint id PK
+        varchar username
+        varchar password
+        varchar email
+        varchar avatar
+        varchar nickname
+        varchar daily_bookmark
+        varchar homepage_background
+        int account_days
+        varchar personal_signature
+        enum status
+        timestamp deleted_at
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    MAIL {
+        bigint id PK
+        bigint sender_id FK
+        varchar stamp_type
+        varchar stamp_content
+        varchar sender_nickname
+        varchar recipient_email
+        text content
+        enum status
+        timestamp read_at
+        timestamp created_at
+    }
+
+    RECEIVED_MAIL {
+        bigint id PK
+        bigint recipient_id FK
+        bigint sender_id FK
+        text content
+        varchar stamp_type
+        varchar sender_nickname
+        bigint original_mail_id FK
+        enum status
+        timestamp read_at
+        timestamp created_at
+    }
+
+    FOLLOW {
+        bigint id PK
+        bigint follower_id
+        bigint following_id
+        timestamp created_at
+    }
+
+    POSTS {
+        bigint id PK
+        bigint user_id FK
+        bigint topic_id FK
+        varchar title
+        text content
+        enum post_type
+        enum status
+        int like_count
+        int collect_count
+        int comment_count
+        int share_count
+        int view_count
+        varchar publish_location
+        decimal latitude
+        decimal longitude
+        timestamp deleted_at
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    POST_COMMENT {
+        bigint id PK
+        bigint post_id FK
+        bigint commenter_id FK
+        text content
+        timestamp created_at
+        bigint root_id
+        bigint parent_id
+        int likes
+        int dislikes
+        int reply_count
+    }
+
+    LIKES {
+        bigint id PK
+        bigint user_id FK
+        enum target_type
+        bigint target_id
+        timestamp created_at
+    }
+
+    FAVORITE {
+        bigint id PK
+        bigint user_id FK
+        bigint post_id FK
+        timestamp created_at
+    }
+
+    ATTACHMENT {
+        bigint id PK
+        varchar file_id
+        varchar file_url
+        varchar file_name
+        bigint file_size
+        varchar file_type
+        varchar mime_type
+        varchar business_type
+        bigint business_id
+        bigint uploader_id FK
+        timestamp upload_time
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    TOPIC {
+        bigint id PK
+        varchar name
+        text description
+        varchar cover_image
+        int post_count
+        int follower_count
+        enum status
+        bigint user_id FK
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    TOPIC_FOLLOW {
+        bigint id PK
+        bigint user_id FK
+        bigint topic_id FK
+        timestamp created_at
+    }
+
+    PSTICKS {
+        bigint id PK
+        bigint user_id FK
+        varchar name
+        varchar content
+        datetime created_at
+        datetime updated_at
+        bigint stick_id
+        bigint spirits
+    }
+
+    STICKS {
+        bigint id PK
+        bigint user_id FK
+        varchar content
+        datetime created_at
+        datetime updated_at
+    }
+
+    SAYINGS {
+        varchar saying PK
+    }
+
+    USER_BEHAVIOR_LOG {
+        bigint id PK
+        bigint user_id FK
+        varchar action_type
+        varchar target_type
+        bigint target_id
+        varchar ip_address
+        text user_agent
+        timestamp created_at
+    }
+
+    SYSTEM_CONFIG {
+        bigint id PK
+        varchar config_key
+        text config_value
+        varchar description
+        enum config_type
+        timestamp updated_at
+    }
